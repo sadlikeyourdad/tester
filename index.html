@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#ffffff">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="manifest" href="manifest.json">
+    <title>Login Page</title>
+</head>
+<body>
+    <div class="login-container">
+        <header>
+            <img src="logo.png" alt="Bank Logo" class="logo">
+        </header>
+        <form action="#" method="POST">
+            <div class="form-group">
+                <input type="text" id="username" placeholder="Prihlasovacie meno / Alias">
+            </div>
+            <div class="form-group">
+                <input type="password" id="password" placeholder="Heslo">
+            </div>
+            <button type="submit">Prihlásiť sa</button>
+        </form>
+        <div class="links">
+            <a href="#">Zabudnuté heslo</a>
+            <a href="#">Nastavenie hesla</a>
+        </div>
+    </div>
+  <script>self.addEventListener('install', function(event) {
+    event.waitUntil(
+        caches.open('v1').then(function(cache) {
+            return cache.addAll([
+                '/',
+                '/index.html',
+                '/styles.css',
+                '/script.js',
+                '/logo.png',
+                '/icon.png'
+            ]);
+        })
+    );
+});
+
+self.addEventListener('fetch', function(event) {
+    event.respondWith(
+        caches.match(event.request).then(function(response) {
+            return response || fetch(event.request);
+        })
+    );
+});</script>
+</body>
+</html>
