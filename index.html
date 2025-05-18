@@ -461,11 +461,15 @@ async function buildGraph() {
 
   const NODE_COUNT = procMap.size;
   const USE_ELK = NODE_COUNT <= 1200;
+  const MAX_NODES = 5000;
+  const MAX_EDGES = 10000;
 
   const elkNodes = [],
     elkEdges = [],
     width = {};
+  let nodeCount = 0;
   procMap.forEach((p, id) => {
+    if (nodeCount >= MAX_NODES) return;
     const main = id === ROOT ? ROOT : p.meta?.binary?.split('/').pop() || id.slice(0, 8);
     const sub = id === ROOT ? '' : `PID ${p.meta?.pid ?? '?'}`;
     width[id] = Math.max(MINW, Math.max(main.length, sub.length) * CHAR + 24);
@@ -476,7 +480,13 @@ async function buildGraph() {
       elkEdges.push({ id: `${par}->${id}`, sources: [par], targets: [id] });
       edgeTime.set(`${par}->${id}`, nodeTime.get(id));
     }
+    nodeCount++;
   });
+
+  if (nodeCount >= MAX_NODES) {
+    show('Warning: Graph truncated to 5000 nodes due to size limits.');
+    setTimeout(() => {}, 2000);
+  }
 
   let layout;
   if (USE_ELK) {
@@ -492,7 +502,7 @@ async function buildGraph() {
         'elk.layered.spacing.nodeNodeBetweenLayers': '48'
       },
       children: elkNodes,
-      edges: elkEdges
+      edges: elkEdges.slice(0, MAX_EDGES)
     });
   }
 
@@ -505,7 +515,9 @@ async function buildGraph() {
 
   const vNodes = [],
     vEdges = [];
+  let edgeCount = 0;
   procMap.forEach((p, id) => {
+    if (!elkNodes.some(n => n.id === id)) return;
     const w = width[id],
       root = id === ROOT,
       hasF = p.files.length;
@@ -541,24 +553,33 @@ async function buildGraph() {
     });
   });
 
-  elkEdges.forEach((e) =>
+  elkEdges.forEach((e) => {
+    if (edgeCount >= MAX_EDGES) return;
     vEdges.push({
       id: e.id,
       from: e.sources[0] + '_out',
       to: e.targets[0] + '_in',
       color: '#8e8e93',
       width: 1.2
-    })
-  );
+    });
+    edgeCount++;
+  });
 
-  // Create empty datasets and network
-  nodesDS = new vis.DataSet();
-  edgesDS = new vis.DataSet();
+  if (edgeCount >= MAX_EDGES) {
+    show('Warning: Graph truncated to 10000 edges due to size limits.');
+    setTimeout(() => {}, 2000);
+  }
+
+  console.log(`Nodes: ${vNodes.length}, Edges: ${vEdges.length}`);
+
+  nodesDS = new vis.DataSet(vNodes);
+  edgesDS = new vis.DataSet(vEdges);
+  network?.destroy();
   network = new vis.Network(
     netDiv,
     { nodes: nodesDS, edges: edgesDS },
     {
-      physics: !USE_ELK,
+      physics: false,
       layout: USE_ELK
         ? undefined
         : { hierarchical: { direction: 'LR', levelSeparation: 100, nodeSpacing: window.innerWidth < 768 ? 80 : 120 } },
@@ -575,111 +596,48 @@ async function buildGraph() {
     }
   );
 
-  // Disable interactions while loading
-  network.setOptions({ interaction: { hover: false, navigationButtons: false, keyboard: false } });
+  const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort((a, b) => a - b);
+  slider.min = 0;
+  slider.max = tsArr.length - 1;
+  slider.step = 1;
+  slider.value = slider.max;
+  timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
 
-  // Split nodes and edges into chunks
-  const chunkSize = 500;
-  const nodeChunks = [];
-  for (let i = 0; i < vNodes.length; i += chunkSize) {
-    nodeChunks.push(vNodes.slice(i, i + chunkSize));
-  }
-  const edgeChunks = [];
-  for (let i = 0; i < vEdges.length; i += chunkSize) {
-    edgeChunks.push(vEdges.slice(i, i + chunkSize));
-  }
+  let raf = null;
+  slider.oninput = () => {
+    const idx = +slider.value;
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      applyTimeline(tsArr[idx]);
+      timeLabel.textContent = new Date(tsArr[idx]).toLocaleString();
+      raf = null;
+    });
+  };
 
-  // Function to add node chunks
-  function addNodeChunk(index) {
-    if (index >= nodeChunks.length) {
-      addEdgeChunk(0);
-      return;
-    }
-    nodesDS.add(nodeChunks[index]);
-    const progress = Math.round((index / nodeChunks.length) * 100);
-    show(`Adding nodes... ${progress}%`);
-    setTimeout(() => addNodeChunk(index + 1), 50);
-  }
-
-  // Function to add edge chunks
-  function addEdgeChunk(index) {
-    if (index >= edgeChunks.length) {
-      finalizeGraph();
-      return;
-    }
-    edgesDS.add(edgeChunks[index]);
-    const progress = Math.round((index / edgeChunks.length) * 100);
-    show(`Adding edges... ${progress}%`);
-    setTimeout(() => addEdgeChunk(index + 1), 50);
-  }
-
-  // Finalize graph after all chunks are added
-  function finalizeGraph() {
-    const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort((a, b) => a - b);
-    slider.min = 0;
-    slider.max = tsArr.length - 1;
-    slider.step = 1;
-    slider.value = slider.max;
-    timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
-
-    let raf = null;
-    slider.oninput = () => {
-      const idx = +slider.value;
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        applyTimeline(tsArr[idx]);
-        timeLabel.textContent = new Date(tsArr[idx]).toLocaleString();
-        raf = null;
-      });
-    };
-
-    applyTimeline(tsArr[slider.max]);
-    network.fit();
-    network.setOptions({ interaction: { hover: true, navigationButtons: true, keyboard: true } });
-    hide();
-  }
-
-  // Start adding node chunks
-  addNodeChunk(0);
-
-  network.on('selectNode', (ev) => {
-    const id = ev.nodes[0];
-    if (!id || id.endsWith('_in') || id.endsWith('_out')) {
-      clearPath();
-      return;
-    }
-    showDetails(id);
-    refreshColors();
-    paintPath(id);
-    if (window.innerWidth < 768) {
-      details.classList.add('visible');
-      detailsToggle.textContent = 'Hide';
-    }
-  });
-  network.on('deselectNode', clearPath);
+  applyTimeline(tsArr[slider.max]);
+  network.fit();
+  hide();
 }
 
-/* --- Timeline Filter --- */
 function applyTimeline(wallMs) {
   nodesDS.forEach(n => {
     if (n.id.endsWith('_in') || n.id.endsWith('_out')) return;
     const hide = nodeTime.get(n.id) > wallMs;
-    nodesDS.update([{ id: n.id,          hidden: hide },
-                    { id: n.id + '_in',  hidden: hide },
+    nodesDS.update([{ id: n.id, hidden: hide },
+                    { id: n.id + '_in', hidden: hide },
                     { id: n.id + '_out', hidden: hide }]);
   });
 
   edgesDS.forEach(e => {
     const hide = edgeTime.get(e.id) > wallMs ||
                  nodesDS.get(e.from.replace(/_out$/, ''))?.hidden ||
-                 nodesDS.get(e.to  .replace(/_in$/,  ''))?.hidden;
+                 nodesDS.get(e.to.replace(/_in$/, ''))?.hidden;
     edgesDS.update({ id: e.id, hidden: hide });
   });
 
   refreshColors();
 }
 
-/* --- Coloring/Search/Path --- */
 function refreshColors(){
   if(!nodesDS)return;
   const q=searchInput.value.trim().toLowerCase(),hits=[];
@@ -695,6 +653,7 @@ function refreshColors(){
   nodesDS.update(ups);
   edgesDS.forEach(e=>{if(!e.hidden)edgesDS.update({id:e.id,color:'#8e8e93',width:1.2})});
 }
+
 function paintPath(id){
   const upsN=[],upsE=[];
   let cur=id;
@@ -707,6 +666,7 @@ function paintPath(id){
   upsN.push({id:ROOT,color:pathCol()});
   nodesDS.update(upsN);edgesDS.update(upsE);
 }
+
 const clearPath=()=>refreshColors();
 
 function fileList(arr) {
@@ -715,7 +675,7 @@ function fileList(arr) {
     arr.slice(0, 150).map(ev => {
       const { type, path } = info(ev);
       const cls =
-        type === 'READ'  ? 'read'  :
+        type === 'READ' ? 'read' :
         type === 'WRITE' ? 'write' : 'unknown';
       return `<li><span class="tag ${cls}">${type}</span>${esc(path)}</li>`;
     }).join('') +
@@ -735,16 +695,14 @@ function rawList(arr) {
   );
 }
 
-/* --- Extract Type/Path from File Event --- */
 function info(ev) {
   if (ev.process_kprobe) {
     const args = ev.process_kprobe.args || [];
     const path = args[0]?.file_arg?.path || 'unknown';
     const code = args[1]?.int_arg;
     return {
-      type: code === 4 ? 'READ'
-         : code === 2 ? 'WRITE'
-         : 'UNKNOWN',
+      type: code === 4 ? 'READ' :
+            code === 2 ? 'WRITE' : 'UNKNOWN',
       path
     };
   }
@@ -759,7 +717,6 @@ function info(ev) {
   return { type: 'UNKNOWN', path: 'unknown' };
 }
 
-/* --- Details Pane --- */
 function showDetails(id) {
   const proc = procMap.get(id);
   if (!proc) return;
@@ -778,36 +735,45 @@ function showDetails(id) {
       <dt>Name</dt>
       <dd><code>${esc(basename(proc.meta?.binary))}</code>
           <span class="pid-badge">(PID ${proc.meta?.pid ?? '?'})</span></dd>
-
       <dt>Command line</dt>
       <dd><code>${esc(proc.meta?.arguments || '')}</code></dd>
-
       <dt>Path</dt>
       <dd><code>${esc(proc.meta?.binary || '')}</code></dd>
-
       <dt>Parent</dt>
       <dd><code>${esc(par.meta?.binary || ROOT)}</code>
           (PID ${par.meta?.pid ?? 0})</dd>
-
       <dt>Started</dt>
       <dd>${proc.meta?.start_time || '?'}</dd>
     </dl>
-
     ${proc.files.length
         ? `<details class="event-group" open>
              <summary>File events (${proc.files.length})</summary>
              ${fileList(proc.files)}
            </details>`
         : ''}
-
     ${proc.nets.length
         ? `<details class="event-group" open>
              <summary>Network events (${proc.nets.length})</summary>
              ${rawList(proc.nets)}
            </details>`
-        : ''}`
-  ;
+        : ''}`;
 }
+
+network?.on('selectNode', (ev) => {
+  const id = ev.nodes[0];
+  if (!id || id.endsWith('_in') || id.endsWith('_out')) {
+    clearPath();
+    return;
+  }
+  showDetails(id);
+  refreshColors();
+  paintPath(id);
+  if (window.innerWidth < 768) {
+    details.classList.add('visible');
+    detailsToggle.textContent = 'Hide';
+  }
+});
+network?.on('deselectNode', clearPath);
 
 </script>
 </body>
