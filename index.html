@@ -10,7 +10,7 @@
   <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
   <script src="https://unpkg.com/elkjs@0.7.1/lib/elk.bundled.js"></script>
 
-  <!-- Responsive macOS-style theme -->
+  <!-- Styles (unchanged from your newer version) -->
   <style>
     :root {
       --bg: #f2f2f7;
@@ -23,253 +23,72 @@
       --yellow: #ffd964;
       --red: #ff453a;
     }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: var(--bg);
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      color: #1c1c1e;
+      background: var(--bg); height: 100vh; display: flex; flex-direction: column; color: #1c1c1e;
       font-size: clamp(14px, 3vw, 16px);
     }
     header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.75rem;
-      padding: 0.5rem 1rem;
-      backdrop-filter: blur(14px);
-      background: var(--header);
-      border-bottom: 1px solid var(--border);
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; padding: 0.5rem 1rem;
+      backdrop-filter: blur(14px); background: var(--header); border-bottom: 1px solid var(--border);
     }
-    header .title {
-      font-size: clamp(1rem, 5vw, 1.25rem);
-      font-weight: 600;
-    }
-    header input[type=file] {
-      display: none;
-    }
+    header .title { font-size: clamp(1rem, 5vw, 1.25rem); font-weight: 600; }
+    header input[type=file] { display: none; }
     label.file-btn {
-      padding: 0.4rem 0.8rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: #fff;
-      cursor: pointer;
-      font-size: clamp(12px, 2.5vw, 14px);
-      touch-action: manipulation;
+      padding: 0.4rem 0.8rem; border: 1px solid var(--border); border-radius: 8px; background: #fff;
+      cursor: pointer; font-size: clamp(12px, 2.5vw, 14px); touch-action: manipulation;
     }
     #searchInput {
-      flex: 1;
-      min-width: 120px;
-      padding: 0.4rem 0.8rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: #fff;
-      font-size: clamp(12px, 2.5vw, 14px);
+      flex: 1; min-width: 120px; padding: 0.4rem 0.8rem; border: 1px solid var(--border);
+      border-radius: 8px; background: #fff; font-size: clamp(12px, 2.5vw, 14px);
     }
-
-    #layout {
-      flex: 1;
-      display: flex;
-      min-height: 0;
-      flex-direction: row;
-    }
-    #network {
-      flex: 3;
-      min-width: 0;
-      height: 100%;
-    }
+    #layout { flex: 1; display: flex; min-height: 0; flex-direction: row; }
+    #network { flex: 3; min-width: 0; height: 100%; }
     #details {
-      flex: 1;
-      min-width: 220px;
-      max-height: 100%;
-      overflow-y: auto;
-      padding: 1rem;
-      background: var(--sidebar);
-      border-left: 1px solid var(--border);
-      backdrop-filter: blur(28px);
+      flex: 1; min-width: 220px; max-height: 100%; overflow-y: auto; padding: 1rem;
+      background: var(--sidebar); border-left: 1px solid var(--border); backdrop-filter: blur(28px);
       transition: transform 0.3s ease;
     }
     #details-toggle {
-      display: none;
-      position: fixed;
-      bottom: 4.5rem;
-      right: 1rem;
-      padding: 0.5rem 1rem;
-      background: var(--blue);
-      color: #fff;
-      border-radius: 8px;
-      cursor: pointer;
-      z-index: 1000;
+      display: none; position: fixed; bottom: 4.5rem; right: 1rem; padding: 0.5rem 1rem;
+      background: var(--blue); color: #fff; border-radius: 8px; cursor: pointer; z-index: 1000;
       touch-action: manipulation;
     }
-    #details h3 {
-      font-size: clamp(0.9rem, 3vw, 1.1rem);
-      font-weight: 600;
-      margin-bottom: 0.25rem;
-    }
-    #details .pid-badge {
-      font-size: clamp(10px, 2vw, 12px);
-      color: var(--mono);
-    }
-    #details dt {
-      font-weight: 600;
-      margin-top: 0.4rem;
-      font-size: clamp(11px, 2.2vw, 13px);
-      color: #3a3a3c;
-    }
-    #details dd {
-      margin: 0.1rem 0 0.4rem 0.1rem;
-      word-break: break-word;
-      font-size: clamp(11px, 2.2vw, 13px);
-    }
-    #details code {
-      font-family: "SF Mono", Consolas, Menlo, monospace;
-      background: #f6f6f8;
-      border-radius: 6px;
-      padding: 2px 5px;
-      color: #1c1c1e;
-    }
-    details.event-group {
-      margin-top: 0.8rem;
-    }
-    details.event-group summary {
-      cursor: pointer;
-      font-weight: 600;
-      font-size: clamp(11px, 2.2vw, 13px);
-    }
-    ul {
-      margin-left: 1rem;
-      list-style: circle;
-      font-size: clamp(11px, 2.2vw, 13px);
-    }
-
-    /* Timeline bar */
-    footer {
-      padding: 0.5rem 1rem;
-      border-top: 1px solid var(--border);
-      background: var(--header);
-      backdrop-filter: blur(14px);
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    #timeSlider {
-      flex: 1;
-      width: 100%;
-      height: 8px;
-      touch-action: pan-x;
-    }
-    #timeLabel {
-      font-size: clamp(10px, 2vw, 12px);
-      color: var(--mono);
-      min-width: 120px;
-      text-align: right;
-    }
-
-    /* Loading overlay */
+    #details h3 { font-size: clamp(0.9rem, 3vw, 1.1rem); font-weight: 600; margin-bottom: 0.25rem; }
+    #details .pid-badge { font-size: clamp(10px, 2vw, 12px); color: var(--mono); }
+    #details dt { font-weight: 600; margin-top: 0.4rem; font-size: clamp(11px, 2.2vw, 13px); color: #3a3a3c; }
+    #details dd { margin: 0.1rem 0 0.4rem 0.1rem; word-break: break-word; font-size: clamp(11px, 2.2vw, 13px); }
+    #details code { font-family: "SF Mono", Consolas, Menlo, monospace; background: #f6f6f8; border-radius: 6px; padding: 2px 5px; color: #1c1c1e; }
+    details.event-group { margin-top: 0.8rem; }
+    details.event-group summary { cursor: pointer; font-weight: 600; font-size: clamp(11px, 2.2vw, 13px); }
+    ul { margin-left: 1rem; list-style: circle; font-size: clamp(11px, 2.2vw, 13px); }
+    footer { padding: 0.5rem 1rem; border-top: 1px solid var(--border); background: var(--header); backdrop-filter: blur(14px); display: flex; align-items: center; gap: 0.5rem; }
+    #timeSlider { flex: 1; width: 100%; height: 8px; touch-action: pan-x; }
+    #timeLabel { font-size: clamp(10px, 2vw, 12px); color: var(--mono); min-width: 120px; text-align: right; }
     #overlay {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(249,249,251,.6);
-      backdrop-filter: blur(4px);
-      font-size: clamp(0.9rem, 3vw, 1.05rem);
-      color: var(--mono);
-      z-index: 999;
-      visibility: hidden;
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(249,249,251,.6); backdrop-filter: blur(4px); font-size: clamp(0.9rem, 3vw, 1.05rem);
+      color: var(--mono); z-index: 999; visibility: hidden;
     }
-    .spinner {
-      width: 24px;
-      height: 24px;
-      border: 4px solid var(--blue);
-      border-top-color: transparent;
-      border-radius: 50%;
-      margin-right: 0.8rem;
-      animation: spin 1s linear infinite;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    .vis-network {
-      background: transparent;
-    }
-    .tag {
-      display: inline-block;
-      font-size: clamp(9px, 2vw, 10px);
-      font-weight: 600;
-      padding: 2px 5px;
-      border-radius: 4px;
-      color: #fff;
-      margin-right: 0.3rem;
-    }
-    .read {
-      background: var(--blue);
-    }
-    .write {
-      background: var(--orange);
-    }
-    .unknown {
-      background: var(--mono);
-    }
-
-    /* Responsive styles */
+    .spinner { width: 24px; height: 24px; border: 4px solid var(--blue); border-top-color: transparent; border-radius: 50%; margin-right: 0.8rem; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .vis-network { background: transparent; }
+    .tag { display: inline-block; font-size: clamp(9px, 2vw, 10px); font-weight: 600; padding: 2px 5px; border-radius: 4px; color: #fff; margin-right: 0.3rem; }
+    .read { background: var(--blue); }
+    .write { background: var(--orange); }
+    .unknown { background: var(--mono); }
     @media (max-width: 768px) {
-      header {
-        flex-direction: column;
-        align-items: flex-start;
-        padding: 0.75rem;
-      }
-      header .title, label.file-btn, #searchInput {
-        width: 100%;
-      }
-      #layout {
-        flex-direction: column;
-      }
-      #network {
-        flex: none;
-        height: 50vh;
-        min-height: 300px;
-      }
-      #details {
-        flex: none;
-        max-height: none;
-        transform: translateX(100%);
-        position: fixed;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        width: 80%;
-        max-width: 300px;
-        z-index: 998;
-      }
-      #details.visible {
-        transform: translateX(0);
-      }
-      #details-toggle {
-        display: block;
-      }
-      footer {
-        flex-wrap: wrap;
-        padding: 0.5rem;
-      }
-      #timeSlider {
-        order: 1;
-        width: 100%;
-      }
-      #timeLabel {
-        order: 2;
-        width: 100%;
-        text-align: center;
-        margin-top: 0.5rem;
-      }
+      header { flex-direction: column; align-items: flex-start; padding: 0.75rem; }
+      header .title, label.file-btn, #searchInput { width: 100%; }
+      #layout { flex-direction: column; }
+      #network { flex: none; height: 50vh; min-height: 300px; }
+      #details { flex: none; max-height: none; transform: translateX(100%); position: fixed; top: 0; right: 0; bottom: 0; width: 80%; max-width: 300px; z-index: 998; }
+      #details.visible { transform: translateX(0); }
+      #details-toggle { display: block; }
+      footer { flex-wrap: wrap; padding: 0.5rem; }
+      #timeSlider { order: 1; width Πολ: 100%; }
+      #timeLabel { order: 2; width: 100%; text-align: center; margin-top: 0.5rem; }
     }
   </style>
 </head>
@@ -279,44 +98,40 @@
   <label class="file-btn">Load JSON<input type="file" id="fileInput" accept=".json,.log,.txt"></label>
   <input id="searchInput" type="search" placeholder="Search process / PID">
 </header>
-
 <div id="layout">
   <div id="network"></div>
   <div id="details"><em>Select a process node to view details.</em></div>
 </div>
-
-<!-- Timeline -->
 <footer>
   <input id="timeSlider" type="range" min="0" max="100" value="100" step="1">
   <span id="timeLabel">–</span>
 </footer>
-
 <div id="overlay"><div class="spinner"></div><span id="overlayText">Loading…</span></div>
 <button id="details-toggle">Details</button>
 
 <script>
 /* --- Config & Helpers --- */
-const ROOT='systemd',H=40,CHAR=8,MINW=120;
-const rootCol =()=>({background:'#d1e3ff',border:'#3c71ff'});
-const normCol =()=>({background:'#ffffff',border:'#d4d4d8'});
-const fileCol =()=>({background:'#e8fafa',border:'#24c0be'});
-const hitCol  =()=>({background:'#ffd964',border:'#ffd200'});
-const pathCol =()=>({background:'#ffeceb',border:'#ff453a'});
-const $ = id=>document.getElementById(id);
-const esc=s=>s.replace(/[&<>"]/g,ch=>({'&':'&','<':'<','>':'>','"':'"'}[ch]));
-const basename=p=>p?.split('/').pop()||'';
+const ROOT = 'systemd', H = 40, CHAR = 8, MINW = 120;
+const rootCol = () => ({ background: '#d1e3ff', border: '#3c71ff' });
+const normCol = () => ({ background: '#ffffff', border: '#d4d4d8' });
+const fileCol = () => ({ background: '#e8fafa', border: '#24c0be' });
+const hitCol  = () => ({ background: '#ffd964', border: '#ffd200' });
+const pathCol = () => ({ background: '#ffeceb', border: '#ff453a' });
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const basename = p => p?.split('/').pop() || '';
 
 /* DOM References */
-const netDiv=$('network'),details=$('details'),overlay=$('overlay'),overlayTxt=$('overlayText'),
-      fileInput=$('fileInput'),searchInput=$('searchInput'),
-      slider=$('timeSlider'),timeLabel=$('timeLabel'),detailsToggle=$('details-toggle');
+const netDiv = $('network'), details = $('details'), overlay = $('overlay'), overlayTxt = $('overlayText'),
+      fileInput = $('fileInput'), searchInput = $('searchInput'),
+      slider = $('timeSlider'), timeLabel = $('timeLabel'), detailsToggle = $('details-toggle');
 
-let network,nodesDS,edgesDS,procMap=new Map(),nodeTime=new Map(),edgeTime=new Map(),
-    minTs=Infinity,maxTs=-Infinity;
+let network, nodesDS, edgesDS, procMap = new Map(), nodeTime = new Map(), edgeTime = new Map(),
+    minTs = Infinity, maxTs = -Infinity;
 
 /* Overlay Helpers */
-const show=txt=>{overlayTxt.textContent=txt;overlay.style.visibility='visible'};
-const hide=()=>overlay.style.visibility='hidden';
+const show = txt => { overlayTxt.textContent = txt; overlay.style.visibility = 'visible'; };
+const hide = () => overlay.style.visibility = 'hidden';
 
 /* Details Toggle */
 detailsToggle.addEventListener('click', () => {
@@ -459,17 +274,8 @@ searchInput.addEventListener('input', refreshColors);
 async function buildGraph() {
   show('Building graph…');
 
-  const NODE_COUNT = procMap.size;
-  const USE_ELK = NODE_COUNT <= 1200;
-  const MAX_NODES = 5000;
-  const MAX_EDGES = 10000;
-
-  const elkNodes = [],
-    elkEdges = [],
-    width = {};
-  let nodeCount = 0;
+  const elkNodes = [], elkEdges = [], width = {};
   procMap.forEach((p, id) => {
-    if (nodeCount >= MAX_NODES) return;
     const main = id === ROOT ? ROOT : p.meta?.binary?.split('/').pop() || id.slice(0, 8);
     const sub = id === ROOT ? '' : `PID ${p.meta?.pid ?? '?'}`;
     width[id] = Math.max(MINW, Math.max(main.length, sub.length) * CHAR + 24);
@@ -480,65 +286,45 @@ async function buildGraph() {
       elkEdges.push({ id: `${par}->${id}`, sources: [par], targets: [id] });
       edgeTime.set(`${par}->${id}`, nodeTime.get(id));
     }
-    nodeCount++;
   });
 
-  if (nodeCount >= MAX_NODES) {
-    show('Warning: Graph truncated to 5000 nodes due to size limits.');
-    setTimeout(() => {}, 2000);
-  }
-
-  let layout;
-  if (USE_ELK) {
-    show('Computing layout (ELK)…');
-    const elk = new ELK();
-    layout = await elk.layout({
-      id: 'root',
-      layoutOptions: {
-        'elk.algorithm': 'layered',
-        'elk.direction': 'RIGHT',
-        'elk.edgeRouting': 'ORTHOGONAL',
-        'elk.spacing.nodeNode': '48',
-        'elk.layered.spacing.nodeNodeBetweenLayers': '48'
-      },
-      children: elkNodes,
-      edges: elkEdges.slice(0, MAX_EDGES)
-    });
-  }
+  show('Computing layout (ELK)…');
+  const elk = new ELK();
+  const layout = await elk.layout({
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.edgeRouting': 'ORTHOGONAL',
+      'elk.spacing.nodeNode': '48',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '48'
+    },
+    children: elkNodes,
+    edges: elkEdges
+  });
 
   const pos = {};
-  if (USE_ELK) {
-    layout.children.forEach(
-      (n) => (pos[n.id] = { x: n.x + width[n.id] / 2, y: n.y + H / 2 })
-    );
-  }
+  layout.children.forEach(n => (pos[n.id] = { x: n.x + width[n.id] / 2, y: n.y + H / 2 }));
 
-  const vNodes = [],
-    vEdges = [];
-  let edgeCount = 0;
+  const vNodes = [], vEdges = [];
   procMap.forEach((p, id) => {
-    if (!elkNodes.some(n => n.id === id)) return;
-    const w = width[id],
-      root = id === ROOT,
-      hasF = p.files.length;
-    const { x, y } = USE_ELK ? pos[id] : { x: undefined, y: undefined };
+    const w = width[id], root = id === ROOT, hasF = p.files.length;
+    const { x, y } = pos[id];
 
     vNodes.push({
       id,
-      label: root
-        ? ROOT
-        : `${p.meta?.binary?.split('/').pop() || id.slice(0, 8)}\nPID ${p.meta?.pid ?? '?'}`,
+      label: root ? ROOT : `${p.meta?.binary?.split('/').pop() || id.slice(0, 8)}\nPID ${p.meta?.pid ?? '?'}`,
       shape: root ? 'ellipse' : 'box',
-      font: { multi: 'html', bold: root, size: window.innerWidth < 768 ? 12 : 14 },
+      font: { multi: 'html', bold: root },
       borderRadius: 12,
       widthConstraint: { minimum: w },
       color: root ? rootCol() : hasF ? fileCol() : normCol(),
       x,
       y,
-      fixed: USE_ELK ? { x: true, y: true } : false
+      fixed: { x: true, y: true }
     });
 
-    ['_in', '_out'].forEach((pt) => {
+    ['_in', '_out'].forEach(pt => {
       const dx = pt === '_in' ? -w / 2 : w / 2;
       vNodes.push({
         id: id + pt,
@@ -546,55 +332,32 @@ async function buildGraph() {
         size: 1,
         color: 'rgba(0,0,0,0)',
         physics: false,
-        x: USE_ELK ? x + dx : undefined,
-        y: USE_ELK ? y : undefined,
-        fixed: USE_ELK ? { x: true, y: true } : false
+        x: x + dx,
+        y: y,
+        fixed: { x: true, y: true }
       });
     });
   });
 
-  elkEdges.forEach((e) => {
-    if (edgeCount >= MAX_EDGES) return;
-    vEdges.push({
-      id: e.id,
-      from: e.sources[0] + '_out',
-      to: e.targets[0] + '_in',
-      color: '#8e8e93',
-      width: 1.2
-    });
-    edgeCount++;
-  });
-
-  if (edgeCount >= MAX_EDGES) {
-    show('Warning: Graph truncated to 10000 edges due to size limits.');
-    setTimeout(() => {}, 2000);
-  }
+  elkEdges.forEach(e => vEdges.push({
+    id: e.id,
+    from: e.sources[0] + '_out',
+    to: e.targets[0] + '_in',
+    color: '#8e8e93',
+    width: 1.2
+  }));
 
   console.log(`Nodes: ${vNodes.length}, Edges: ${vEdges.length}`);
 
   nodesDS = new vis.DataSet(vNodes);
   edgesDS = new vis.DataSet(vEdges);
+
   network?.destroy();
-  network = new vis.Network(
-    netDiv,
-    { nodes: nodesDS, edges: edgesDS },
-    {
-      physics: false,
-      layout: USE_ELK
-        ? undefined
-        : { hierarchical: { direction: 'LR', levelSeparation: 100, nodeSpacing: window.innerWidth < 768 ? 80 : 120 } },
-      edges: { smooth: false },
-      interaction: {
-        hover: true,
-        navigationButtons: true,
-        keyboard: true,
-        zoomView: true,
-        dragView: true,
-        multiselect: false,
-        touchSensitivity: 10
-      }
-    }
-  );
+  network = new vis.Network(netDiv, { nodes: nodesDS, edges: edgesDS }, {
+    physics: false,
+    edges: { smooth: false },
+    interaction: { hover: true, navigationButtons: true, keyboard: true }
+  });
 
   const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort((a, b) => a - b);
   slider.min = 0;
@@ -614,167 +377,119 @@ async function buildGraph() {
     });
   };
 
+  network.on('selectNode', ev => {
+    const id = ev.nodes[0];
+    if (!id || id.endsWith('_in') || id.endsWith('_out')) { clearPath(); return; }
+    showDetails(id);
+    refreshColors();
+    paintPath(id);
+  });
+  network.on('deselectNode', clearPath);
+
   applyTimeline(tsArr[slider.max]);
-  network.fit();
   hide();
 }
 
+/* --- Timeline Filter --- */
 function applyTimeline(wallMs) {
   nodesDS.forEach(n => {
     if (n.id.endsWith('_in') || n.id.endsWith('_out')) return;
     const hide = nodeTime.get(n.id) > wallMs;
-    nodesDS.update([{ id: n.id, hidden: hide },
-                    { id: n.id + '_in', hidden: hide },
-                    { id: n.id + '_out', hidden: hide }]);
+    nodesDS.update([{ id: n.id, hidden: hide }, { id: n.id + '_in', hidden: hide }, { id: n.id + '_out', hidden: hide }]);
   });
 
   edgesDS.forEach(e => {
-    const hide = edgeTime.get(e.id) > wallMs ||
-                 nodesDS.get(e.from.replace(/_out$/, ''))?.hidden ||
-                 nodesDS.get(e.to.replace(/_in$/, ''))?.hidden;
+    const hide = edgeTime.get(e.id) > wallMs || nodesDS.get(e.from.replace(/_out$/, ''))?.hidden || nodesDS.get(e.to.replace(/_in$/, ''))?.hidden;
     edgesDS.update({ id: e.id, hidden: hide });
   });
 
   refreshColors();
 }
 
-function refreshColors(){
-  if(!nodesDS)return;
-  const q=searchInput.value.trim().toLowerCase(),hits=[];
-  procMap.forEach((p,id)=>{const s=`${p.meta?.binary||''} ${p.meta?.pid||''}`.toLowerCase();
-    if(q&&s.includes(q))hits.push(id);});
-  const ups=[];
-  nodesDS.forEach(n=>{
-    if(n.hidden||n.id.endsWith('_in')||n.id.endsWith('_out'))return;
-    const p=procMap.get(n.id),col=
-      n.id===ROOT?rootCol():hits.includes(n.id)?hitCol():p.files.length?fileCol():normCol();
-    ups.push({...n,color:col});
+/* --- Coloring/Search/Path --- */
+function refreshColors() {
+  if (!nodesDS) return;
+  const q = searchInput.value.trim().toLowerCase(), hits = [];
+  procMap.forEach((p, id) => {
+    const s = `${p.meta?.binary || ''} ${p.meta?.pid || ''}`.toLowerCase();
+    if (q && s.includes(q)) hits.push(id);
+  });
+  const ups = [];
+  nodesDS.forEach(n => {
+    if (n.hidden || n.id.endsWith('_in') || n.id.endsWith('_out')) return;
+    const p = procMap.get(n.id), col = n.id === ROOT ? rootCol() : hits.includes(n.id) ? hitCol() : p.files.length ? fileCol() : normCol();
+    ups.push({ ...n, color: col });
   });
   nodesDS.update(ups);
-  edgesDS.forEach(e=>{if(!e.hidden)edgesDS.update({id:e.id,color:'#8e8e93',width:1.2})});
+  edgesDS.forEach(e => { if (!e.hidden) edgesDS.update({ id: e.id, color: '#8e8e93', width: 1.2 }); });
 }
 
-function paintPath(id){
-  const upsN=[],upsE=[];
-  let cur=id;
-  while(cur&&cur!==ROOT){
-    const par=procMap.get(cur)?.parent||ROOT;
-    if(!nodesDS.get(cur)?.hidden)upsN.push({id:cur,color:pathCol()});
-    if(!edgesDS.get(`${par}->${cur}`)?.hidden)upsE.push({id:`${par}->${cur}`,color:'#ff453a',width:2.6});
-    cur=par;
+function paintPath(id) {
+  const upsN = [], upsE = [];
+  let cur = id;
+  while (cur && cur !== ROOT) {
+    const par = procMap.get(cur)?.parent || ROOT;
+    if (!nodesDS.get(cur)?.hidden) upsN.push({ id: cur, color: pathCol() });
+    if (!edgesDS.get(`${par}->${cur}`)?.hidden) upsE.push({ id: `${par}->${cur}`, color: '#ff453a', width: 2.6 });
+    cur = par;
   }
-  upsN.push({id:ROOT,color:pathCol()});
-  nodesDS.update(upsN);edgesDS.update(upsE);
+  upsN.push({ id: ROOT, color: pathCol() });
+  nodesDS.update(upsN);
+  edgesDS.update(upsE);
 }
 
-const clearPath=()=>refreshColors();
+const clearPath = () => refreshColors();
 
 function fileList(arr) {
-  return (
-    '<ul>' +
-    arr.slice(0, 150).map(ev => {
-      const { type, path } = info(ev);
-      const cls =
-        type === 'READ' ? 'read' :
-        type === 'WRITE' ? 'write' : 'unknown';
-      return `<li><span class="tag ${cls}">${type}</span>${esc(path)}</li>`;
-    }).join('') +
-    (arr.length > 150 ? '<li>…</li>' : '') +
-    '</ul>'
-  );
+  return '<ul>' + arr.slice(0, 150).map(ev => {
+    const { type, path } = info(ev);
+    const cls = type === 'READ' ? 'read' : type === 'WRITE' ? 'write' : 'unknown';
+    return `<li><span class="tag ${cls}">${type}</span>${esc(path)}</li>`;
+  }).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
 }
 
 function rawList(arr) {
-  return (
-    '<ul>' +
-    arr.slice(0, 150).map(ev =>
-      `<li><pre>${esc(JSON.stringify(ev).slice(0, 240))}</pre></li>`
-    ).join('') +
-    (arr.length > 150 ? '<li>…</li>' : '') +
-    '</ul>'
-  );
+  return '<ul>' + arr.slice(0, 150).map(ev => `<li><pre>${esc(JSON.stringify(ev).slice(0, 240))}</pre></li>`).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
 }
 
+/* --- Extract Type/Path from File Event --- */
 function info(ev) {
   if (ev.process_kprobe) {
     const args = ev.process_kprobe.args || [];
     const path = args[0]?.file_arg?.path || 'unknown';
     const code = args[1]?.int_arg;
-    return {
-      type: code === 4 ? 'READ' :
-            code === 2 ? 'WRITE' : 'UNKNOWN',
-      path
-    };
+    return { type: code === 4 ? 'READ' : code === 2 ? 'WRITE' : 'UNKNOWN', path };
   }
-
   if (ev.file_event) {
-    return {
-      type: (ev.file_event.event_type || 'UNKNOWN').toUpperCase(),
-      path: ev.file_event.path || 'unknown'
-    };
+    return { type: (ev.file_event.event_type || 'UNKNOWN').toUpperCase(), path: ev.file_event.path || 'unknown' };
   }
-
   return { type: 'UNKNOWN', path: 'unknown' };
 }
 
+/* --- Details Pane --- */
 function showDetails(id) {
   const proc = procMap.get(id);
   if (!proc) return;
 
   if (id === ROOT) {
-    details.innerHTML =
-      '<h2>Process Details</h2><p><b>systemd</b> (synthetic root)</p>';
+    details.innerHTML = '<h2>Process Details</h2><p><b>systemd</b> (synthetic root)</p>';
     return;
   }
 
   const par = procMap.get(proc.parent) || procMap.get(ROOT);
-
-  details.innerHTML = 
-    `<h2>Process Details</h2>
+  details.innerHTML = `
+    <h2>Process Details</h2>
     <dl>
-      <dt>Name</dt>
-      <dd><code>${esc(basename(proc.meta?.binary))}</code>
-          <span class="pid-badge">(PID ${proc.meta?.pid ?? '?'})</span></dd>
-      <dt>Command line</dt>
-      <dd><code>${esc(proc.meta?.arguments || '')}</code></dd>
-      <dt>Path</dt>
-      <dd><code>${esc(proc.meta?.binary || '')}</code></dd>
-      <dt>Parent</dt>
-      <dd><code>${esc(par.meta?.binary || ROOT)}</code>
-          (PID ${par.meta?.pid ?? 0})</dd>
-      <dt>Started</dt>
-      <dd>${proc.meta?.start_time || '?'}</dd>
+      <dt>Name</dt><dd><code>${esc(basename(proc.meta?.binary))}</code> <span class="pid-badge">(PID ${proc.meta?.pid ?? '?'})</span></dd>
+      <dt>Command line</dt><dd><code>${esc(proc.meta?.arguments || '')}</code></dd>
+      <dt>Path</dt><dd><code>${esc(proc.meta?.binary || '')}</code></dd>
+      <dt>Parent</dt><dd><code>${esc(par.meta?.binary || ROOT)}</code> (PID ${par.meta?.pid ?? 0})</dd>
+      <dt>Started</dt><dd>${proc.meta?.start_time || '?'}</dd>
     </dl>
-    ${proc.files.length
-        ? `<details class="event-group" open>
-             <summary>File events (${proc.files.length})</summary>
-             ${fileList(proc.files)}
-           </details>`
-        : ''}
-    ${proc.nets.length
-        ? `<details class="event-group" open>
-             <summary>Network events (${proc.nets.length})</summary>
-             ${rawList(proc.nets)}
-           </details>`
-        : ''}`;
+    ${proc.files.length ? `<details class="event-group" open><summary>File events (${proc.files.length})</summary>${fileList(proc.files)}</details>` : ''}
+    ${proc.nets.length ? `<details class="event-group" open><summary>Network events (${proc.nets.length})</summary>${rawList(proc.nets)}</details>` : ''}
+  `;
 }
-
-network?.on('selectNode', (ev) => {
-  const id = ev.nodes[0];
-  if (!id || id.endsWith('_in') || id.endsWith('_out')) {
-    clearPath();
-    return;
-  }
-  showDetails(id);
-  refreshColors();
-  paintPath(id);
-  if (window.innerWidth < 768) {
-    details.classList.add('visible');
-    detailsToggle.textContent = 'Hide';
-  }
-});
-network?.on('deselectNode', clearPath);
-
 </script>
 </body>
 </html>
