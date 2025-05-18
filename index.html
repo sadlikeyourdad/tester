@@ -4,12 +4,12 @@
   <meta charset="UTF-8" />
   <title>Linux Process-Tree Viewer</title>
 
-  <!-- deps -->
+  <!-- Dependencies -->
   <link href="https://unpkg.com/vis-network@9.1.2/styles/vis-network.min.css" rel="stylesheet"/>
   <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
   <script src="https://unpkg.com/elkjs@0.7.1/lib/elk.bundled.js"></script>
 
-  <!-- minimal mac-style theme -->
+  <!-- Minimal macOS-style theme -->
   <style>
     :root{--bg:#f2f2f7;--sidebar:#ffffffd2;--header:#fbfbfdcc;--border:#d9d9e0;
           --mono:#636366;--blue:#0a84ff;--orange:#ff8f28;--yellow:#ffd964;--red:#ff453a}
@@ -36,13 +36,13 @@
     details.event-group{margin-top:1rem}details.event-group summary{cursor:pointer;font-weight:600}
     ul{margin-left:1.1rem;list-style:circle;font-size:.83rem}
 
-    /* timeline bar */
+    /* Timeline bar */
     footer{padding:.5rem 1.25rem;border-top:1px solid var(--border);background:var(--header);
            backdrop-filter:blur(14px);display:flex;align-items:center;gap:.75rem}
     #timeSlider{flex:1;width:100%}
     #timeLabel{font-size:.85rem;color:var(--mono);min-width:140px;text-align:right}
 
-    /* loading overlay */
+    /* Loading overlay */
     #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
              background:rgba(249,249,251,.6);backdrop-filter:blur(4px);font-size:1.05rem;color:var(--mono);
              z-index:999;visibility:hidden}
@@ -66,16 +66,16 @@
   <div id="details"><em>Select a process node to view details.</em></div>
 </div>
 
-<!-- timeline -->
+<!-- Timeline -->
 <footer>
   <input id="timeSlider" type="range" min="0" max="100" value="100" step="1">
-  <span id="timeLabel">â</span>
+  <span id="timeLabel">–</span>
 </footer>
 
-<div id="overlay"><div class="spinner"></div><span id="overlayText">Loadingâ¦</span></div>
+<div id="overlay"><div class="spinner"></div><span id="overlayText">Loading…</span></div>
 
 <script>
-/* âââ config & helpers âââââââââââââââââââââââââââââââââââââââââââââââ */
+/* --- Config & Helpers --- */
 const ROOT='systemd',H=40,CHAR=8,MINW=120;
 const rootCol =()=>({background:'#d1e3ff',border:'#3c71ff'});
 const normCol =()=>({background:'#ffffff',border:'#d4d4d8'});
@@ -86,7 +86,7 @@ const $ = id=>document.getElementById(id);
 const esc=s=>s.replace(/[&<>"]/g,ch=>({'&':'&','<':'<','>':'>','"':'"'}[ch]));
 const basename=p=>p?.split('/').pop()||'';
 
-/* DOM refs */
+/* DOM References */
 const netDiv=$('network'),details=$('details'),overlay=$('overlay'),overlayTxt=$('overlayText'),
       fileInput=$('fileInput'),searchInput=$('searchInput'),
       slider=$('timeSlider'),timeLabel=$('timeLabel');
@@ -94,133 +94,145 @@ const netDiv=$('network'),details=$('details'),overlay=$('overlay'),overlayTxt=$
 let network,nodesDS,edgesDS,procMap=new Map(),nodeTime=new Map(),edgeTime=new Map(),
     minTs=Infinity,maxTs=-Infinity;
 
-/* overlay helpers */
+/* Overlay Helpers */
 const show=txt=>{overlayTxt.textContent=txt;overlay.style.visibility='visible'};
 const hide=()=>overlay.style.visibility='hidden';
 
-/* load file */
-fileInput.addEventListener('change',e=>{
-  const f=e.target.files[0];if(!f)return;
-  show('Reading fileâ¦');
-  const r=new FileReader();r.onload=ev=>setTimeout(()=>buildTree(ev.target.result),24);r.readAsText(f);
+/* Worker Script */
+const workerScript = `
+  self.onmessage = function(e) {
+    const text = e.data;
+    const procMap = new Map();
+    const nodeTime = new Map();
+    const edgeTime = new Map();
+    let minTs = Infinity;
+    let maxTs = -Infinity;
+
+    const ROOT_ID = 'systemd';
+    function up(id) {
+      return procMap.get(id) || procMap.set(id, { meta: null, parent: ROOT_ID, files: [], nets: [] }).get(id);
+    }
+    function remember(id, ts) {
+      if (isNaN(ts)) return;
+      if (!nodeTime.has(id) || ts < nodeTime.get(id)) nodeTime.set(id, ts);
+      minTs = Math.min(minTs, ts);
+      maxTs = Math.max(maxTs, ts);
+    }
+
+    up(ROOT_ID).meta = { binary: ROOT_ID, pid: 0 };
+
+    const lines = text.split(/\\r?\\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const ts = Date.parse(ev.time || '');
+      if (isNaN(ts)) continue;
+
+      if (ev.process_exec || ev.process_exit) {
+        const child = (ev.process_exec || ev.process_exit).process;
+        const parent = (ev.process_exec || ev.process_exit).parent;
+
+        const c = up(child.exec_id);
+        c.meta = child;
+        c.parent = child.parent_exec_id || ROOT_ID;
+        remember(child.exec_id, ts);
+
+        if (parent) {
+          const p = up(parent.exec_id);
+          p.meta ??= parent;
+          p.parent ??= parent.parent_exec_id || ROOT_ID;
+          remember(parent.exec_id, ts);
+        }
+      } else {
+        const jsonStr = JSON.stringify(ev);
+        const isFile = /file_arg|file_event|security_file|fs/i.test(jsonStr);
+        const isNet = /net|connect|l3_l4/i.test(jsonStr);
+        if (!isFile && !isNet) continue;
+
+        const procObj = ev.process || ev.process_kprobe?.process || ev.l3_l4?.process || ev.file_event?.process;
+        const parentObj = ev.process_kprobe?.parent || ev.l3_l4?.parent || ev.file_event?.parent;
+        const id = procObj?.exec_id;
+        if (!id) continue;
+
+        const rec = up(id);
+        if (!rec.meta && procObj) {
+          rec.meta = procObj;
+          rec.parent = procObj.parent_exec_id || parentObj?.exec_id || ROOT_ID;
+        }
+        if (procObj?.parent_exec_id && rec.parent === ROOT_ID)
+          rec.parent = procObj.parent_exec_id;
+
+        if (parentObj) {
+          const pr = up(parentObj.exec_id);
+          pr.meta ??= parentObj;
+          pr.parent ??= parentObj.parent_exec_id || ROOT_ID;
+          remember(parentObj.exec_id, ts);
+        }
+
+        if (isFile) rec.files.push(ev);
+        if (isNet) rec.nets.push(ev);
+
+        remember(id, ts);
+      }
+
+      if (i % 100 === 0) {
+        self.postMessage({ type: 'progress', percentage: Math.round((i / lines.length) * 100) });
+      }
+    }
+
+    procMap.forEach((_, id) => {
+      if (!nodeTime.has(id)) nodeTime.set(id, minTs);
+    });
+
+    self.postMessage({
+      type: 'complete',
+      data: { procMap, nodeTime, edgeTime, minTs, maxTs }
+    });
+  };
+`;
+
+/* Load File */
+fileInput.addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  show('Reading file…');
+  const r = new FileReader();
+  r.onload = ev => {
+    const blob = new Blob([workerScript], { type: 'application/javascript' });
+    const worker = new Worker(URL.createObjectURL(blob));
+    worker.onmessage = function(msg) {
+      if (msg.data.type === 'progress') {
+        show(`Parsing events... ${msg.data.percentage}%`);
+      } else if (msg.data.type === 'complete') {
+        procMap = msg.data.data.procMap;
+        nodeTime = msg.data.data.nodeTime;
+        edgeTime = msg.data.data.edgeTime;
+        minTs = msg.data.data.minTs;
+        maxTs = msg.data.data.maxTs;
+        buildGraph();
+        worker.terminate();
+      }
+    };
+    worker.onerror = function(error) {
+      show('Error processing file: ' + error.message);
+      worker.terminate();
+    };
+    worker.postMessage(ev.target.result);
+  };
+  r.readAsText(f);
 });
-searchInput.addEventListener('input',refreshColors);
+searchInput.addEventListener('input', refreshColors);
 
-/* âââ buildTree ââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+/* --- Build Graph --- */
+async function buildGraph() {
+  show('Building graph…');
 
-async function buildTree(text) {
-  show('Parsing eventsâ¦');
-
-  /* ---------- state ---------- */
-  procMap  = new Map();
-  nodeTime = new Map();
-  edgeTime = new Map();
-  minTs    =  Infinity;
-  maxTs    = -Infinity;
-
-  const ROOT_ID = ROOT;
-  up(ROOT_ID).meta = { binary: ROOT_ID, pid: 0 };
-
-  /* ---------- helpers ---------- */
-  function remember(id, ts) {
-    if (isNaN(ts)) return;
-    if (!nodeTime.has(id) || ts < nodeTime.get(id)) nodeTime.set(id, ts);
-    minTs = Math.min(minTs, ts);
-    maxTs = Math.max(maxTs, ts);
-  }
-  function up(id) {
-    return (
-      procMap.get(id) ||
-      procMap.set(id, { meta: null, parent: ROOT_ID, files: [], nets: [] }).get(id)
-    );
-  }
-
-  /* ---------- 1. parse each line individually ---------- */
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    let ev;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const ts = Date.parse(ev.time || '');
-    if (isNaN(ts)) continue;
-
-    /* ------------ exec / exit ------------ */
-    if (ev.process_exec || ev.process_exit) {
-      const child  = (ev.process_exec || ev.process_exit).process;
-      const parent = (ev.process_exec || ev.process_exit).parent;
-
-      const c = up(child.exec_id);
-      c.meta = child;
-      c.parent = child.parent_exec_id || ROOT_ID;
-      remember(child.exec_id, ts);
-
-      if (parent) {
-        const p = up(parent.exec_id);
-        p.meta ??= parent;
-        p.parent ??= parent.parent_exec_id || ROOT_ID;
-        remember(parent.exec_id, ts);
-      }
-    } else {
-      /* ------------ file / net / kprobe ------------ */
-      const jsonStr = JSON.stringify(ev);
-      const isFile = /file_arg|file_event|security_file|fs/i.test(jsonStr);
-      const isNet = /net|connect|l3_l4/i.test(jsonStr);
-      if (!isFile && !isNet) continue;
-
-      const procObj =
-        ev.process ||
-        ev.process_kprobe?.process ||
-        ev.l3_l4?.process ||
-        ev.file_event?.process;
-
-      const parentObj =
-        ev.process_kprobe?.parent ||
-        ev.l3_l4?.parent ||
-        ev.file_event?.parent;
-
-      const id = procObj?.exec_id;
-      if (!id) continue;
-
-      const rec = up(id);
-      if (!rec.meta && procObj) {
-        rec.meta = procObj;
-        rec.parent = procObj.parent_exec_id || parentObj?.exec_id || ROOT_ID;
-      }
-      if (procObj?.parent_exec_id && rec.parent === ROOT_ID)
-        rec.parent = procObj.parent_exec_id;
-
-      if (parentObj) {
-        const pr = up(parentObj.exec_id);
-        pr.meta ??= parentObj;
-        pr.parent ??= parentObj.parent_exec_id || ROOT_ID;
-        remember(parentObj.exec_id, ts);
-      }
-
-      if (isFile) rec.files.push(ev);
-      if (isNet) rec.nets.push(ev);
-
-      remember(id, ts);
-    }
-
-    if (i % 100 === 0) {
-      show(`Parsing events... (${i} / ${lines.length})`);
-      await new Promise(r => setTimeout(r, 0)); // Yield to UI
-    }
-  }
-
-  show('Processing complete. Building graph...');
-
-  /* ensure every node has a timestamp */
-  procMap.forEach((_, id) => {
-    if (!nodeTime.has(id)) nodeTime.set(id, minTs);
-  });
-
-  /* ---------- 2. choose layout: ELK â¤1200, vis-hierarchical otherwise ---------- */
   const NODE_COUNT = procMap.size;
   const USE_ELK = NODE_COUNT <= 1200;
 
@@ -228,13 +240,13 @@ async function buildTree(text) {
     elkEdges = [],
     width = {};
   procMap.forEach((p, id) => {
-    const main = id === ROOT_ID ? ROOT_ID : p.meta?.binary?.split('/').pop() || id.slice(0, 8);
-    const sub = id === ROOT_ID ? '' : `PID ${p.meta?.pid ?? '?'}`;
+    const main = id === ROOT ? ROOT : p.meta?.binary?.split('/').pop() || id.slice(0, 8);
+    const sub = id === ROOT ? '' : `PID ${p.meta?.pid ?? '?'}`;
     width[id] = Math.max(MINW, Math.max(main.length, sub.length) * CHAR + 24);
     elkNodes.push({ id, width: width[id], height: H });
 
-    if (id !== ROOT_ID) {
-      const par = p.parent && procMap.has(p.parent) ? p.parent : ROOT_ID;
+    if (id !== ROOT) {
+      const par = p.parent && procMap.has(p.parent) ? p.parent : ROOT;
       elkEdges.push({ id: `${par}->${id}`, sources: [par], targets: [id] });
       edgeTime.set(`${par}->${id}`, nodeTime.get(id));
     }
@@ -242,7 +254,7 @@ async function buildTree(text) {
 
   let layout;
   if (USE_ELK) {
-    show('Computing layout (ELK)â¦');
+    show('Computing layout (ELK)…');
     const elk = new ELK();
     layout = await elk.layout({
       id: 'root',
@@ -258,7 +270,6 @@ async function buildTree(text) {
     });
   }
 
-  /* ---------- 3. build vis datasets ---------- */
   const pos = {};
   if (USE_ELK) {
     layout.children.forEach(
@@ -270,14 +281,14 @@ async function buildTree(text) {
     vEdges = [];
   procMap.forEach((p, id) => {
     const w = width[id],
-      root = id === ROOT_ID,
+      root = id === ROOT,
       hasF = p.files.length;
     const { x, y } = USE_ELK ? pos[id] : { x: undefined, y: undefined };
 
     vNodes.push({
       id,
       label: root
-        ? ROOT_ID
+        ? ROOT
         : `${p.meta?.binary?.split('/').pop() || id.slice(0, 8)}\nPID ${p.meta?.pid ?? '?'}`,
       shape: root ? 'ellipse' : 'box',
       font: { multi: 'html', bold: root },
@@ -343,7 +354,6 @@ async function buildTree(text) {
   });
   network.on('deselectNode', clearPath);
 
-  /* ---------- 4. discrete timeline ---------- */
   const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort(
     (a, b) => a - b
   );
@@ -369,9 +379,8 @@ async function buildTree(text) {
   hide();
 }
 
-/* ---------- timeline filter ------------------------------------------ */
+/* --- Timeline Filter --- */
 function applyTimeline(wallMs) {
-  /* hide / show nodes */
   nodesDS.forEach(n => {
     if (n.id.endsWith('_in') || n.id.endsWith('_out')) return;
     const hide = nodeTime.get(n.id) > wallMs;
@@ -380,7 +389,6 @@ function applyTimeline(wallMs) {
                     { id: n.id + '_out', hidden: hide }]);
   });
 
-  /* hide / show edges */
   edgesDS.forEach(e => {
     const hide = edgeTime.get(e.id) > wallMs ||
                  nodesDS.get(e.from.replace(/_out$/, ''))?.hidden ||
@@ -388,10 +396,10 @@ function applyTimeline(wallMs) {
     edgesDS.update({ id: e.id, hidden: hide });
   });
 
-  refreshColors();      // keep search / highlight colours in sync
+  refreshColors();
 }
 
-/* ---------- colouring/search/path ------------------------------------ */
+/* --- Coloring/Search/Path --- */
 function refreshColors(){
   if(!nodesDS)return;
   const q=searchInput.value.trim().toLowerCase(),hits=[];
@@ -431,7 +439,7 @@ function fileList(arr) {
         type === 'WRITE' ? 'write' : 'unknown';
       return `<li><span class="tag ${cls}">${type}</span>${esc(path)}</li>`;
     }).join('') +
-    (arr.length > 150 ? '<li>â¦</li>' : '') +
+    (arr.length > 150 ? '<li>…</li>' : '') +
     '</ul>'
   );
 }
@@ -442,14 +450,13 @@ function rawList(arr) {
     arr.slice(0, 150).map(ev =>
       `<li><pre>${esc(JSON.stringify(ev).slice(0, 240))}</pre></li>`
     ).join('') +
-    (arr.length > 150 ? '<li>â¦</li>' : '') +
+    (arr.length > 150 ? '<li>…</li>' : '') +
     '</ul>'
   );
 }
 
-/* ---------- extract type / path from a file event ------------------- */
+/* --- Extract Type/Path from File Event --- */
 function info(ev) {
-  /* kprobe from tetragon â READ (4) / WRITE (2) */
   if (ev.process_kprobe) {
     const args = ev.process_kprobe.args || [];
     const path = args[0]?.file_arg?.path || 'unknown';
@@ -462,7 +469,6 @@ function info(ev) {
     };
   }
 
-  /* native file_event object */
   if (ev.file_event) {
     return {
       type: (ev.file_event.event_type || 'UNKNOWN').toUpperCase(),
@@ -473,7 +479,7 @@ function info(ev) {
   return { type: 'UNKNOWN', path: 'unknown' };
 }
 
-/* ---------- details pane (with File / Net events) -------------------- */
+/* --- Details Pane --- */
 function showDetails(id) {
   const proc = procMap.get(id);
   if (!proc) return;
