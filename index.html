@@ -1,53 +1,272 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#ffffff">
-    <link rel="stylesheet" href="styles.css">
-    <link rel="manifest" href="manifest.json">
-    <title>Login Page</title>
+  <meta charset="UTF-8" />
+  <title>Linux Process-Tree Viewer</title>
+
+  <!-- deps -->
+  <link href="https://unpkg.com/vis-network@9.1.2/styles/vis-network.min.css" rel="stylesheet"/>
+  <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+  <script src="https://unpkg.com/elkjs@0.7.1/lib/elk.bundled.js"></script>
+
+  <!-- minimal mac-style theme -->
+  <style>
+    :root{--bg:#f2f2f7;--sidebar:#ffffffd2;--header:#fbfbfdcc;--border:#d9d9e0;
+          --mono:#636366;--blue:#0a84ff;--orange:#ff8f28;--yellow:#ffd964;--red:#ff453a}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+         background:var(--bg);height:100vh;display:flex;flex-direction:column;color:#1c1c1e}
+    header{display:flex;align-items:center;gap:1rem;padding:.65rem 1.25rem;
+           backdrop-filter:blur(14px);background:var(--header);border-bottom:1px solid var(--border)}
+    header .title{font-size:1.25rem;font-weight:600}
+    header input[type=file]{display:none}
+    label.file-btn{padding:.45rem .9rem;border:1px solid var(--border);border-radius:10px;background:#fff;cursor:pointer}
+    #searchInput{flex:0 0 240px;padding:.45rem .9rem;border:1px solid var(--border);border-radius:10px;background:#fff}
+
+    #layout{flex:1;display:flex;min-height:0}
+    #network{flex:3;min-width:0}
+    #details{flex:1;min-width:260px;overflow-y:auto;padding:1rem 1.25rem;background:var(--sidebar);
+             border-left:1px solid var(--border);backdrop-filter:blur(28px)}
+    #details code{font-family:"SF Mono",Consolas,monospace;background:#f6f6f8;border-radius:6px;padding:2px 5px}
+
+    /* timeline bar */
+    footer{padding:.5rem 1.25rem;border-top:1px solid var(--border);background:var(--header);
+           backdrop-filter:blur(14px);display:flex;align-items:center;gap:.75rem}
+    #timeSlider{flex:1;width:100%}
+    #timeLabel{font-size:.85rem;color:var(--mono);min-width:140px;text-align:right}
+
+    /* loading overlay */
+    #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+             background:rgba(249,249,251,.6);backdrop-filter:blur(4px);font-size:1.05rem;color:var(--mono);
+             z-index:999;visibility:hidden}
+    .spinner{width:28px;height:28px;border:4px solid var(--blue);border-top-color:transparent;border-radius:50%;
+             margin-right:.9rem;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+    .vis-network{background:transparent}
+  </style>
 </head>
 <body>
-    <div class="login-container">
-        <header>
-            <img src="logo.png" alt="Bank Logo" class="logo">
-        </header>
-        <form action="#" method="POST">
-            <div class="form-group">
-                <input type="text" id="username" placeholder="Prihlasovacie meno / Alias">
-            </div>
-            <div class="form-group">
-                <input type="password" id="password" placeholder="Heslo">
-            </div>
-            <button type="submit">Prihlásiť sa</button>
-        </form>
-        <div class="links">
-            <a href="#">Zabudnuté heslo</a>
-            <a href="#">Nastavenie hesla</a>
-        </div>
-    </div>
-  <script>self.addEventListener('install', function(event) {
-    event.waitUntil(
-        caches.open('v1').then(function(cache) {
-            return cache.addAll([
-                '/',
-                '/index.html',
-                '/styles.css',
-                '/script.js',
-                '/logo.png',
-                '/icon.png'
-            ]);
-        })
-    );
-});
+<header>
+  <span class="title">Linux Process-Tree Viewer</span>
+  <label class="file-btn">Load JSON<input type="file" id="fileInput" accept=".json,.log,.txt"></label>
+  <input id="searchInput" type="search" placeholder="Search process / PID">
+</header>
 
-self.addEventListener('fetch', function(event) {
-    event.respondWith(
-        caches.match(event.request).then(function(response) {
-            return response || fetch(event.request);
-        })
-    );
-});</script>
+<div id="layout">
+  <div id="network"></div>
+  <div id="details"><em>Select a process node to view details.</em></div>
+</div>
+
+<!-- timeline -->
+<footer>
+  <input id="timeSlider" type="range" min="0" max="100" value="100" step="1">
+  <span id="timeLabel">–</span>
+</footer>
+
+<div id="overlay"><div class="spinner"></div><span id="overlayText">Loading…</span></div>
+
+<script>
+/* ─── config & helpers ─────────────────────────────────────────────── */
+const ROOT='systemd',H=40,CHAR=8,MINW=120;
+const rootCol =()=>({background:'#d1e3ff',border:'#3c71ff'});
+const normCol =()=>({background:'#ffffff',border:'#d4d4d8'});
+const fileCol =()=>({background:'#e8fafa',border:'#24c0be'});
+const hitCol  =()=>({background:'#ffd964',border:'#ffd200'});
+const pathCol =()=>({background:'#ffeceb',border:'#ff453a'});
+const $ = id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+const basename=p=>p?.split('/').pop()||'';
+
+/* DOM refs */
+const netDiv=$('network'),details=$('details'),overlay=$('overlay'),overlayTxt=$('overlayText'),
+      fileInput=$('fileInput'),searchInput=$('searchInput'),
+      slider=$('timeSlider'),timeLabel=$('timeLabel');
+
+let network,nodesDS,edgesDS,procMap=new Map(),nodeTime=new Map(),edgeTime=new Map(),
+    minTs=Infinity,maxTs=-Infinity;
+
+/* overlay helpers */
+const show=txt=>{overlayTxt.textContent=txt;overlay.style.visibility='visible'};
+const hide=()=>overlay.style.visibility='hidden';
+
+/* load file */
+fileInput.addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;
+  show('Reading file…');
+  const r=new FileReader();r.onload=ev=>setTimeout(()=>buildTree(ev.target.result),24);r.readAsText(f);
+});
+searchInput.addEventListener('input',refreshColors);
+slider.addEventListener('input',()=>applyTimeline(+slider.value));
+
+/* ─── buildTree ────────────────────────────────────────────────────── */
+async function buildTree(text){
+  show('Parsing events…');
+  procMap=new Map();nodeTime=new Map();edgeTime=new Map();minTs=Infinity;maxTs=-Infinity;
+  up(ROOT).meta={binary:ROOT,pid:0};
+
+  /* parse lines */
+  text.split(/\r?\n/).forEach(line=>{
+    if(!(line=line.trim()))return;
+    let ev;try{ev=JSON.parse(line);}catch{return;}
+    const ts=Date.parse(ev.time||ev.timestamp||ev.ts||'');
+    if(!isNaN(ts)){minTs=Math.min(minTs,ts);maxTs=Math.max(maxTs,ts);}
+
+    if(ev.process_exec||ev.process_exit){
+      const child = (ev.process_exec||ev.process_exit).process;
+      const parent= (ev.process_exec||ev.process_exit).parent;
+      fill(child,ts); if(parent) fill(parent,ts);
+    }else{
+      const isFile=/file|fs/i.test(JSON.stringify(ev)),isNet=/net|connect|l3_l4/i.test(JSON.stringify(ev));
+      if(!isFile&&!isNet)return;
+      const proc  = ev.process||
+                    ev.process_kprobe?.process||ev.l3_l4?.process||ev.file_event?.process;
+      const par   = ev.process_kprobe?.parent||ev.l3_l4?.parent||ev.file_event?.parent;
+      if(proc) fill(proc,ts);
+      if(par)  fill(par ,ts);
+      const rec=up(proc?.exec_id);
+      if(isFile) rec.files.push(ev);
+      if(isNet ) rec.nets .push(ev);
+    }
+    function fill(meta,t){
+      if(!meta||!meta.exec_id)return;
+      const r=up(meta.exec_id);
+      r.meta??=meta;
+      r.parent??=meta.parent_exec_id||ROOT;
+      nodeTime.set(meta.exec_id,Math.min(nodeTime.get(meta.exec_id)||Infinity,t||Infinity));
+    }
+  });
+
+  show('Computing layout…');
+
+  /* ELK layout */
+  const elkNodes=[],elkEdges=[],width={};
+  procMap.forEach((p,id)=>{
+    const main=id===ROOT?ROOT:basename(p.meta?.binary)||id.slice(0,8);
+    const sub =id===ROOT?'':`PID ${p.meta?.pid??'?'}`;
+    width[id]=Math.max(MINW,Math.max(main.length,sub.length)*CHAR+24);
+    elkNodes.push({id,width:width[id],height:H});
+    if(id!==ROOT){
+      const par=(p.parent&&procMap.has(p.parent))?p.parent:ROOT;
+      elkEdges.push({id:`${par}->${id}`,sources:[par],targets:[id]});
+      edgeTime.set(`${par}->${id}`,nodeTime.get(id)||minTs);
+    }
+  });
+  const elk=new ELK(),layout=await elk.layout({id:'root',layoutOptions:{
+    'elk.algorithm':'layered','elk.direction':'RIGHT','elk.edgeRouting':'ORTHOGONAL',
+    'elk.spacing.nodeNode':'48','elk.layered.spacing.nodeNodeBetweenLayers':'48'},
+    children:elkNodes,edges:elkEdges});
+
+  /* build vis data */
+  const pos={};layout.children.forEach(n=>pos[n.id]={x:n.x+width[n.id]/2,y:n.y+H/2});
+  const vNodes=[],vEdges=[];
+  procMap.forEach((p,id)=>{
+    const c=pos[id],w=width[id],root=id===ROOT,f=p.files.length;
+    vNodes.push({id,label:root?ROOT:`${basename(p.meta?.binary)||id.slice(0,8)}\nPID ${p.meta?.pid??'?'}`,
+                 x:c.x,y:c.y,fixed:{x:true,y:true},shape:root?'ellipse':'box',widthConstraint:{minimum:w},
+                 borderRadius:12,color:root?rootCol():f?fileCol():normCol()});
+    ['_in','_out'].forEach(port=>{
+      const dx=port=='_in'? -w/2:w/2;
+      vNodes.push({id:id+port,x:c.x+dx,y:c.y,fixed:{x:true,y:true},shape:'dot',size:1,color:'rgba(0,0,0,0)',physics:false});
+    });
+  });
+  elkEdges.forEach(e=>vEdges.push({id:e.id,from:e.sources[0]+'_out',to:e.targets[0]+'_in',
+                                   color:'#8e8e93',width:1.2}));
+
+  nodesDS=new vis.DataSet(vNodes);edgesDS=new vis.DataSet(vEdges);
+  network?.destroy();
+  network=new vis.Network(netDiv,{nodes:nodesDS,edges:edgesDS},{physics:false,edges:{smooth:false}});
+
+  network.on('selectNode',ev=>{
+    const id=ev.nodes[0];
+    if(!id||id.endsWith('_in')||id.endsWith('_out')){clearPath();return;}
+    showDetails(id);refreshColors();paintPath(id);
+  });
+  network.on('deselectNode',clearPath);
+
+  procMap.forEach((v,k)=>{if(!nodeTime.has(k))nodeTime.set(k,minTs)}); /* safety */
+
+  /* timeline init */
+  slider.min=0;slider.max=maxTs-minTs;slider.value=slider.max;
+  timeLabel.textContent=new Date(maxTs).toLocaleString();
+  applyTimeline(slider.value);
+
+  hide();
+
+  /* helpers */
+  function up(id){return procMap.get(id)||procMap.set(id,{meta:null,parent:ROOT,files:[],nets:[]}).get(id);}
+}
+
+/* ---------- timeline filter ------------------------------------------ */
+function applyTimeline(offset){
+  const wall=minTs+ +offset;
+  timeLabel.textContent=new Date(wall).toLocaleString();
+
+  const hiddenPorts=[];
+  nodesDS.forEach(n=>{
+    if(n.id.endsWith('_in')||n.id.endsWith('_out'))hiddenPorts.push(n.id);
+  });
+
+  nodesDS.forEach(n=>{
+    if(n.id.endsWith('_in')||n.id.endsWith('_out'))return;
+    const hide=nodeTime.get(n.id)>wall;
+    nodesDS.update({id:n.id,hidden:hide});
+    nodesDS.update({id:n.id+'_in',hidden:hide});
+    nodesDS.update({id:n.id+'_out',hidden:hide});
+  });
+  edgesDS.forEach(e=>{
+    const hide=edgeTime.get(e.id)>wall||
+               nodesDS.get(e.from.replace(/_out$/,''))?.hidden||
+               nodesDS.get(e.to.replace(/_in$/,''))?.hidden;
+    edgesDS.update({id:e.id,hidden:hide});
+  });
+  refreshColors();
+}
+
+/* ---------- colouring/search/path ------------------------------------ */
+function refreshColors(){
+  if(!nodesDS)return;
+  const q=searchInput.value.trim().toLowerCase(),hits=[];
+  procMap.forEach((p,id)=>{const s=`${p.meta?.binary||''} ${p.meta?.pid||''}`.toLowerCase();
+    if(q&&s.includes(q))hits.push(id);});
+  const ups=[];
+  nodesDS.forEach(n=>{
+    if(n.hidden||n.id.endsWith('_in')||n.id.endsWith('_out'))return;
+    const p=procMap.get(n.id),col=
+      n.id===ROOT?rootCol():hits.includes(n.id)?hitCol():p.files.length?fileCol():normCol();
+    ups.push({...n,color:col});
+  });
+  nodesDS.update(ups);
+  edgesDS.forEach(e=>{if(!e.hidden)edgesDS.update({id:e.id,color:'#8e8e93',width:1.2})});
+}
+function paintPath(id){
+  const upsN=[],upsE=[];
+  let cur=id;
+  while(cur&&cur!==ROOT){
+    const par=procMap.get(cur)?.parent||ROOT;
+    if(!nodesDS.get(cur)?.hidden)upsN.push({id:cur,color:pathCol()});
+    if(!edgesDS.get(`${par}->${cur}`)?.hidden)upsE.push({id:`${par}->${cur}`,color:'#ff453a',width:2.6});
+    cur=par;
+  }
+  upsN.push({id:ROOT,color:pathCol()});
+  nodesDS.update(upsN);edgesDS.update(upsE);
+}
+const clearPath=()=>refreshColors();
+
+/* ---------- details pane --------------------------------------------- */
+function showDetails(id){
+  const proc=procMap.get(id);if(!proc)return;
+  if(id===ROOT){details.innerHTML='<h2>Process Details</h2><p><b>systemd</b> (synthetic root)</p>';return;}
+  const par=procMap.get(proc.parent)||procMap.get(ROOT);
+  details.innerHTML=`
+    <h2>Process Details</h2>
+    <dl>
+      <dt>Name</dt>
+      <dd><code>${esc(basename(proc.meta?.binary))}</code>
+          <span class="pid-badge">(PID ${proc.meta?.pid??'?'})</span></dd>
+      <dt>Command line</dt><dd><code>${esc(proc.meta?.arguments||'')}</code></dd>
+      <dt>Path</dt><dd><code>${esc(proc.meta?.binary||'')}</code></dd>
+      <dt>Parent</dt><dd><code>${esc(par.meta?.binary||ROOT)}</code> (PID ${par.meta?.pid??0})</dd>
+      <dt>Started</dt><dd>${proc.meta?.start_time||'?'}</dd>
+    </dl>`;}
+</script>
 </body>
 </html>
