@@ -83,7 +83,7 @@ const fileCol =()=>({background:'#e8fafa',border:'#24c0be'});
 const hitCol  =()=>({background:'#ffd964',border:'#ffd200'});
 const pathCol =()=>({background:'#ffeceb',border:'#ff453a'});
 const $ = id=>document.getElementById(id);
-const esc=s=>s.replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+const esc=s=>s.replace(/[&<>"]/g,ch=>({'&':'&','<':'<','>':'>','"':'"'}[ch]));
 const basename=p=>p?.split('/').pop()||'';
 
 /* DOM refs */
@@ -135,43 +135,37 @@ async function buildTree(text) {
     );
   }
 
-  /* ---------- 1. streamed parse (yield UI every batch) ---------- */
+  /* ---------- 1. parse each line individually ---------- */
   const lines = text.split(/\r?\n/);
-  const batchSize = 1000;
-  for (let i = 0; i < lines.length; i += batchSize) {
-    const batchLines = lines.slice(i, i + batchSize).filter(line => line.trim());
-    if (batchLines.length === 0) continue;
-    const batchJson = '[' + batchLines.join(',') + ']';
-    let batchEvents;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let ev;
     try {
-      batchEvents = JSON.parse(batchJson);
-    } catch (e) {
-      console.error('Error parsing batch:', e);
+      ev = JSON.parse(line);
+    } catch {
       continue;
     }
-    for (const ev of batchEvents) {
-      const ts = Date.parse(ev.time || '');
-      if (isNaN(ts)) continue;
+    const ts = Date.parse(ev.time || '');
+    if (isNaN(ts)) continue;
 
-      /* ------------ exec / exit ------------ */
-      if (ev.process_exec || ev.process_exit) {
-        const child  = (ev.process_exec || ev.process_exit).process;
-        const parent = (ev.process_exec || ev.process_exit).parent;
+    /* ------------ exec / exit ------------ */
+    if (ev.process_exec || ev.process_exit) {
+      const child  = (ev.process_exec || ev.process_exit).process;
+      const parent = (ev.process_exec || ev.process_exit).parent;
 
-        const c = up(child.exec_id);
-        c.meta = child;
-        c.parent = child.parent_exec_id || ROOT_ID;
-        remember(child.exec_id, ts);
+      const c = up(child.exec_id);
+      c.meta = child;
+      c.parent = child.parent_exec_id || ROOT_ID;
+      remember(child.exec_id, ts);
 
-        if (parent) {
-          const p = up(parent.exec_id);
-          p.meta ??= parent;
-          p.parent ??= parent.parent_exec_id || ROOT_ID;
-          remember(parent.exec_id, ts);
-        }
-        continue;
+      if (parent) {
+        const p = up(parent.exec_id);
+        p.meta ??= parent;
+        p.parent ??= parent.parent_exec_id || ROOT_ID;
+        remember(parent.exec_id, ts);
       }
-
+    } else {
       /* ------------ file / net / kprobe ------------ */
       const jsonStr = JSON.stringify(ev);
       const isFile = /file_arg|file_event|security_file|fs/i.test(jsonStr);
@@ -212,8 +206,14 @@ async function buildTree(text) {
 
       remember(id, ts);
     }
-    await new Promise(r => setTimeout(r, 0)); // Yield to UI
+
+    if (i % 100 === 0) {
+      show(`Parsing events... (${i} / ${lines.length})`);
+      await new Promise(r => setTimeout(r, 0)); // Yield to UI
+    }
   }
+
+  show('Processing complete. Building graph...');
 
   /* ensure every node has a timestamp */
   procMap.forEach((_, id) => {
