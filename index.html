@@ -95,7 +95,6 @@ fileInput.addEventListener('change',e=>{
   const r=new FileReader();r.onload=ev=>setTimeout(()=>buildTree(ev.target.result),24);r.readAsText(f);
 });
 searchInput.addEventListener('input',refreshColors);
-slider.addEventListener('input',()=>applyTimeline(+slider.value));
 
 /* ─── buildTree ────────────────────────────────────────────────────── */
 async function buildTree(text) {
