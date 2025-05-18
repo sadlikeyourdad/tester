@@ -98,101 +98,216 @@ searchInput.addEventListener('input',refreshColors);
 slider.addEventListener('input',()=>applyTimeline(+slider.value));
 
 /* ─── buildTree ────────────────────────────────────────────────────── */
-async function buildTree(text){
+async function buildTree(text) {
+  /* ---------------- overlay ---------------- */
   show('Parsing events…');
-  procMap=new Map();nodeTime=new Map();edgeTime=new Map();minTs=Infinity;maxTs=-Infinity;
-  up(ROOT).meta={binary:ROOT,pid:0};
 
-  /* parse lines */
-  text.split(/\r?\n/).forEach(line=>{
-    if(!(line=line.trim()))return;
-    let ev;try{ev=JSON.parse(line);}catch{return;}
-    const ts=Date.parse(ev.time||ev.timestamp||ev.ts||'');
-    if(!isNaN(ts)){minTs=Math.min(minTs,ts);maxTs=Math.max(maxTs,ts);}
+  /* ---------------- data stores ---------------- */
+  procMap   = new Map();                       // exec_id → {meta,parent,files,nets}
+  nodeTime  = new Map();                       // exec_id → first-seen ms
+  edgeTime  = new Map();                       // "parent->child" → ms
+  minTs     =  Infinity;
+  maxTs     = -Infinity;
 
-    if(ev.process_exec||ev.process_exit){
-      const child = (ev.process_exec||ev.process_exit).process;
-      const parent= (ev.process_exec||ev.process_exit).parent;
-      fill(child,ts); if(parent) fill(parent,ts);
-    }else{
-      const isFile=/file|fs/i.test(JSON.stringify(ev)),isNet=/net|connect|l3_l4/i.test(JSON.stringify(ev));
-      if(!isFile&&!isNet)return;
-      const proc  = ev.process||
-                    ev.process_kprobe?.process||ev.l3_l4?.process||ev.file_event?.process;
-      const par   = ev.process_kprobe?.parent||ev.l3_l4?.parent||ev.file_event?.parent;
-      if(proc) fill(proc,ts);
-      if(par)  fill(par ,ts);
-      const rec=up(proc?.exec_id);
-      if(isFile) rec.files.push(ev);
-      if(isNet ) rec.nets .push(ev);
+  up(ROOT).meta = { binary: ROOT, pid: 0 };    // root stub
+
+  /* helper: earliest timestamp for a node */
+  function remember(id, iso) {
+    const t = Date.parse(iso || '');
+    if (isNaN(t)) return;
+    if (!nodeTime.has(id) || t < nodeTime.get(id)) nodeTime.set(id, t);
+    minTs = Math.min(minTs, t);
+    maxTs = Math.max(maxTs, t);
+  }
+
+  /* ---------- 1. parse every log line ---------- */
+  text.split(/\r?\n/).forEach(line => {
+    if (!(line = line.trim())) return;
+    let ev; try { ev = JSON.parse(line); } catch { return; }
+
+    /* process_exec / process_exit ---------------- */
+    if (ev.process_exec || ev.process_exit) {
+      const child  = (ev.process_exec || ev.process_exit).process;
+      const parent = (ev.process_exec || ev.process_exit).parent;
+
+      const c = up(child.exec_id);
+      c.meta   = child;
+      c.parent = child.parent_exec_id || ROOT;
+      remember(child.exec_id, ev.time);
+
+      if (parent) {
+        const p = up(parent.exec_id);
+        p.meta   ??= parent;
+        p.parent ??= parent.parent_exec_id || ROOT;
+        remember(parent.exec_id, ev.time);
+      }
+      return;
     }
-    function fill(meta,t){
-      if(!meta||!meta.exec_id)return;
-      const r=up(meta.exec_id);
-      r.meta??=meta;
-      r.parent??=meta.parent_exec_id||ROOT;
-      nodeTime.set(meta.exec_id,Math.min(nodeTime.get(meta.exec_id)||Infinity,t||Infinity));
+
+    /* file / net / kprobe events ----------------- */
+    const isFile = /file|fs/i.test(JSON.stringify(ev));
+    const isNet  = /net|connect|l3_l4/i.test(JSON.stringify(ev));
+    if (!isFile && !isNet) return;
+
+    const procObj   = ev.process ||
+                      ev.process_kprobe?.process ||
+                      ev.l3_l4?.process ||
+                      ev.file_event?.process;
+
+    const parentObj = ev.process_kprobe?.parent ||
+                      ev.l3_l4?.parent ||
+                      ev.file_event?.parent;
+
+    const id = procObj?.exec_id;
+    if (!id) return;
+
+    const rec = up(id);
+    if (!rec.meta && procObj) {
+      rec.meta   = procObj;
+      rec.parent = procObj.parent_exec_id || parentObj?.exec_id || ROOT;
     }
+    if (procObj?.parent_exec_id && rec.parent === ROOT)
+      rec.parent = procObj.parent_exec_id;
+
+    if (parentObj) {
+      const pr = up(parentObj.exec_id);
+      pr.meta   ??= parentObj;
+      pr.parent ??= parentObj.parent_exec_id || ROOT;
+      remember(parentObj.exec_id, ev.time);
+    }
+
+    if (isFile) rec.files.push(ev);
+    if (isNet)  rec.nets .push(ev);
+
+    remember(id, ev.time);
   });
 
+  /* ensure every node has some timestamp */
+  procMap.forEach((_, id) => {
+    if (!nodeTime.has(id)) nodeTime.set(id, minTs);
+  });
+
+  /* ---------- 2. ELK layout ---------- */
   show('Computing layout…');
 
-  /* ELK layout */
-  const elkNodes=[],elkEdges=[],width={};
-  procMap.forEach((p,id)=>{
-    const main=id===ROOT?ROOT:basename(p.meta?.binary)||id.slice(0,8);
-    const sub =id===ROOT?'':`PID ${p.meta?.pid??'?'}`;
-    width[id]=Math.max(MINW,Math.max(main.length,sub.length)*CHAR+24);
-    elkNodes.push({id,width:width[id],height:H});
-    if(id!==ROOT){
-      const par=(p.parent&&procMap.has(p.parent))?p.parent:ROOT;
-      elkEdges.push({id:`${par}->${id}`,sources:[par],targets:[id]});
-      edgeTime.set(`${par}->${id}`,nodeTime.get(id)||minTs);
+  const elkNodes = [], elkEdges = [], width = {};
+  procMap.forEach((p, id) => {
+    const main = id === ROOT ? ROOT : (p.meta?.binary?.split('/').pop() || id.slice(0, 8));
+    const sub  = id === ROOT ? ''   : `PID ${p.meta?.pid ?? '?'}`;
+    width[id]  = Math.max(MINW, Math.max(main.length, sub.length) * CHAR + 24);
+
+    elkNodes.push({ id, width: width[id], height: H });
+
+    if (id !== ROOT) {
+      const parent = (p.parent && procMap.has(p.parent)) ? p.parent : ROOT;
+      elkEdges.push({ id: `${parent}->${id}`, sources: [parent], targets: [id] });
+      edgeTime.set(`${parent}->${id}`, nodeTime.get(id));
     }
   });
-  const elk=new ELK(),layout=await elk.layout({id:'root',layoutOptions:{
-    'elk.algorithm':'layered','elk.direction':'RIGHT','elk.edgeRouting':'ORTHOGONAL',
-    'elk.spacing.nodeNode':'48','elk.layered.spacing.nodeNodeBetweenLayers':'48'},
-    children:elkNodes,edges:elkEdges});
 
-  /* build vis data */
-  const pos={};layout.children.forEach(n=>pos[n.id]={x:n.x+width[n.id]/2,y:n.y+H/2});
-  const vNodes=[],vEdges=[];
-  procMap.forEach((p,id)=>{
-    const c=pos[id],w=width[id],root=id===ROOT,f=p.files.length;
-    vNodes.push({id,label:root?ROOT:`${basename(p.meta?.binary)||id.slice(0,8)}\nPID ${p.meta?.pid??'?'}`,
-                 x:c.x,y:c.y,fixed:{x:true,y:true},shape:root?'ellipse':'box',widthConstraint:{minimum:w},
-                 borderRadius:12,color:root?rootCol():f?fileCol():normCol()});
-    ['_in','_out'].forEach(port=>{
-      const dx=port=='_in'? -w/2:w/2;
-      vNodes.push({id:id+port,x:c.x+dx,y:c.y,fixed:{x:true,y:true},shape:'dot',size:1,color:'rgba(0,0,0,0)',physics:false});
+  const elk = new ELK();
+  const layout = await elk.layout({
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm'                             : 'layered',
+      'elk.direction'                             : 'RIGHT',
+      'elk.edgeRouting'                           : 'ORTHOGONAL',
+      'elk.spacing.nodeNode'                      : '48',
+      'elk.layered.spacing.nodeNodeBetweenLayers' : '48'
+    },
+    children: elkNodes,
+    edges: elkEdges
+  });
+
+  /* ---------- 3. build vis datasets ---------- */
+  const pos = {};
+  layout.children.forEach(n => pos[n.id] = {
+    x: n.x + width[n.id] / 2,
+    y: n.y + H / 2
+  });
+
+  const vNodes = [], vEdges = [];
+  procMap.forEach((p, id) => {
+    const c = pos[id], w = width[id], root = id === ROOT, f = p.files.length;
+
+    vNodes.push({
+      id,
+      label: root ? ROOT : `${p.meta?.binary?.split('/').pop() || id.slice(0, 8)}\nPID ${p.meta?.pid ?? '?'}`,
+      x: c.x, y: c.y, fixed: {x: true, y: true},
+      shape: root ? 'ellipse' : 'box',
+      widthConstraint: { minimum: w },
+      borderRadius: 12,
+      font: { multi: 'html', bold: root },
+      color: root ? rootCol() : f ? fileCol() : normCol()
+    });
+
+    ['_in', '_out'].forEach(port => {
+      const dx = port === '_in' ? -w / 2 : w / 2;
+      vNodes.push({ id: id + port, x: c.x + dx, y: c.y,
+                    fixed: {x:true,y:true}, shape:'dot', size:1,
+                    color:'rgba(0,0,0,0)', physics:false });
     });
   });
-  elkEdges.forEach(e=>vEdges.push({id:e.id,from:e.sources[0]+'_out',to:e.targets[0]+'_in',
-                                   color:'#8e8e93',width:1.2}));
 
-  nodesDS=new vis.DataSet(vNodes);edgesDS=new vis.DataSet(vEdges);
+  elkEdges.forEach(e => vEdges.push({
+    id: e.id,
+    from: e.sources[0] + '_out',
+    to  : e.targets[0] + '_in',
+    color: '#8e8e93',
+    width: 1.2
+  }));
+
+  nodesDS = new vis.DataSet(vNodes);
+  edgesDS = new vis.DataSet(vEdges);
+
   network?.destroy();
-  network=new vis.Network(netDiv,{nodes:nodesDS,edges:edgesDS},{physics:false,edges:{smooth:false}});
+  network = new vis.Network(
+    netDiv,
+    { nodes: nodesDS, edges: edgesDS },
+    { physics: false, edges: { smooth: false },
+      interaction: { hover: true, navigationButtons: true, keyboard: true } }
+  );
 
-  network.on('selectNode',ev=>{
-    const id=ev.nodes[0];
-    if(!id||id.endsWith('_in')||id.endsWith('_out')){clearPath();return;}
-    showDetails(id);refreshColors();paintPath(id);
+  /* ---------- 4. callbacks ---------- */
+  network.on('selectNode', ev => {
+    const id = ev.nodes[0];
+    if (!id || id.endsWith('_in') || id.endsWith('_out')) { clearPath(); return; }
+    showDetails(id); refreshColors(); paintPath(id);
   });
-  network.on('deselectNode',clearPath);
+  network.on('deselectNode', clearPath);
 
-  procMap.forEach((v,k)=>{if(!nodeTime.has(k))nodeTime.set(k,minTs)}); /* safety */
+  /* ---------- 5. discrete timeline ---------- */
+  const tsArr = Array.from(new Set([
+    ...nodeTime.values(),
+    ...edgeTime.values()
+  ])).sort((a,b)=>a-b);
 
-  /* timeline init */
-  slider.min=0;slider.max=maxTs-minTs;slider.value=slider.max;
-  timeLabel.textContent=new Date(maxTs).toLocaleString();
-  applyTimeline(slider.value);
+  slider.min  = 0;
+  slider.max  = tsArr.length - 1;
+  slider.step = 1;
+  slider.value = slider.max;
+  timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
 
+  let raf = null;
+  slider.oninput = () => {
+    const idx = +slider.value;
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      applyTimeline(tsArr[idx]);
+      timeLabel.textContent = new Date(tsArr[idx]).toLocaleString();
+      raf = null;
+    });
+  };
+
+  /* initial render at end of capture */
+  applyTimeline(tsArr[slider.max]);
   hide();
 
-  /* helpers */
-  function up(id){return procMap.get(id)||procMap.set(id,{meta:null,parent:ROOT,files:[],nets:[]}).get(id);}
+  /* ---------- local helper ---------- */
+  function up(id) {
+    return procMap.get(id) ||
+           procMap.set(id, { meta: null, parent: ROOT, files: [], nets: [] }).get(id);
+  }
 }
 
 /* ---------- timeline filter ------------------------------------------ */
