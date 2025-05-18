@@ -551,10 +551,9 @@ async function buildGraph() {
     })
   );
 
-  nodesDS = new vis.DataSet(vNodes);
-  edgesDS = new vis.DataSet(vEdges);
-
-  network?.destroy();
+  // Create empty datasets and network
+  nodesDS = new vis.DataSet();
+  edgesDS = new vis.DataSet();
   network = new vis.Network(
     netDiv,
     { nodes: nodesDS, edges: edgesDS },
@@ -576,6 +575,73 @@ async function buildGraph() {
     }
   );
 
+  // Disable interactions while loading
+  network.setOptions({ interaction: { hover: false, navigationButtons: false, keyboard: false } });
+
+  // Split nodes and edges into chunks
+  const chunkSize = 500;
+  const nodeChunks = [];
+  for (let i = 0; i < vNodes.length; i += chunkSize) {
+    nodeChunks.push(vNodes.slice(i, i + chunkSize));
+  }
+  const edgeChunks = [];
+  for (let i = 0; i < vEdges.length; i += chunkSize) {
+    edgeChunks.push(vEdges.slice(i, i + chunkSize));
+  }
+
+  // Function to add node chunks
+  function addNodeChunk(index) {
+    if (index >= nodeChunks.length) {
+      addEdgeChunk(0);
+      return;
+    }
+    nodesDS.add(nodeChunks[index]);
+    const progress = Math.round((index / nodeChunks.length) * 100);
+    show(`Adding nodes... ${progress}%`);
+    setTimeout(() => addNodeChunk(index + 1), 50);
+  }
+
+  // Function to add edge chunks
+  function addEdgeChunk(index) {
+    if (index >= edgeChunks.length) {
+      finalizeGraph();
+      return;
+    }
+    edgesDS.add(edgeChunks[index]);
+    const progress = Math.round((index / edgeChunks.length) * 100);
+    show(`Adding edges... ${progress}%`);
+    setTimeout(() => addEdgeChunk(index + 1), 50);
+  }
+
+  // Finalize graph after all chunks are added
+  function finalizeGraph() {
+    const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort((a, b) => a - b);
+    slider.min = 0;
+    slider.max = tsArr.length - 1;
+    slider.step = 1;
+    slider.value = slider.max;
+    timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
+
+    let raf = null;
+    slider.oninput = () => {
+      const idx = +slider.value;
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        applyTimeline(tsArr[idx]);
+        timeLabel.textContent = new Date(tsArr[idx]).toLocaleString();
+        raf = null;
+      });
+    };
+
+    applyTimeline(tsArr[slider.max]);
+    network.fit();
+    network.setOptions({ interaction: { hover: true, navigationButtons: true, keyboard: true } });
+    hide();
+  }
+
+  // Start adding node chunks
+  addNodeChunk(0);
+
   network.on('selectNode', (ev) => {
     const id = ev.nodes[0];
     if (!id || id.endsWith('_in') || id.endsWith('_out')) {
@@ -591,30 +657,6 @@ async function buildGraph() {
     }
   });
   network.on('deselectNode', clearPath);
-
-  const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort(
-    (a, b) => a - b
-  );
-
-  slider.min = 0;
-  slider.max = tsArr.length - 1;
-  slider.step = 1;
-  slider.value = slider.max;
-  timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
-
-  let raf = null;
-  slider.oninput = () => {
-    const idx = +slider.value;
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
-      applyTimeline(tsArr[idx]);
-      timeLabel.textContent = new Date(tsArr[idx]).toLocaleString();
-      raf = null;
-    });
-  };
-
-  applyTimeline(tsArr[slider.max]);
-  hide();
 }
 
 /* --- Timeline Filter --- */
