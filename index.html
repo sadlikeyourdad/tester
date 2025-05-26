@@ -5,12 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Linux Process-Tree Viewer</title>
 
-  <!-- Dependencies -->
   <link href="https://unpkg.com/vis-network@9.1.2/styles/vis-network.min.css" rel="stylesheet"/>
   <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
   <script src="https://unpkg.com/elkjs@0.7.1/lib/elk.bundled.js"></script>
 
-  <!-- Styles (unchanged from your newer version) -->
   <style>
     :root {
       --bg: #f2f2f7;
@@ -87,7 +85,7 @@
       #details.visible { transform: translateX(0); }
       #details-toggle { display: block; }
       footer { flex-wrap: wrap; padding: 0.5rem; }
-      #timeSlider { order: 1; width Πολ: 100%; }
+      #timeSlider { order: 1; width: 100%; } /* Corrected typo from Î Î¿Î»: to 100% */
       #timeLabel { order: 2; width: 100%; text-align: center; margin-top: 0.5rem; }
     }
   </style>
@@ -104,9 +102,9 @@
 </div>
 <footer>
   <input id="timeSlider" type="range" min="0" max="100" value="100" step="1">
-  <span id="timeLabel">–</span>
+  <span id="timeLabel">â</span>
 </footer>
-<div id="overlay"><div class="spinner"></div><span id="overlayText">Loading…</span></div>
+<div id="overlay"><div class="spinner"></div><span id="overlayText">Loadingâ¦</span></div>
 <button id="details-toggle">Details</button>
 
 <script>
@@ -127,7 +125,11 @@ const netDiv = $('network'), details = $('details'), overlay = $('overlay'), ove
       slider = $('timeSlider'), timeLabel = $('timeLabel'), detailsToggle = $('details-toggle');
 
 let network, nodesDS, edgesDS, procMap = new Map(), nodeTime = new Map(), edgeTime = new Map(),
-    minTs = Infinity, maxTs = -Infinity;
+    minTs = Infinity, maxTs = -Infinity, tsArr = [];
+
+let selectedNodeIdForPath = null;
+let selectedPathNodes = new Set();
+let selectedPathEdges = new Set();
 
 /* Overlay Helpers */
 const show = txt => { overlayTxt.textContent = txt; overlay.style.visibility = 'visible'; };
@@ -139,13 +141,13 @@ detailsToggle.addEventListener('click', () => {
   detailsToggle.textContent = details.classList.contains('visible') ? 'Hide' : 'Details';
 });
 
-/* Worker Script */
+/* Worker Script (unchanged) */
 const workerScript = `
   self.onmessage = function(e) {
     const text = e.data;
     const procMap = new Map();
     const nodeTime = new Map();
-    const edgeTime = new Map();
+    const edgeTime = new Map(); // Though not explicitly populated in worker, keep for consistency with main thread var
     let minTs = Infinity;
     let maxTs = -Infinity;
 
@@ -161,6 +163,8 @@ const workerScript = `
     }
 
     up(ROOT_ID).meta = { binary: ROOT_ID, pid: 0 };
+    remember(ROOT_ID, 0); // Give root a timestamp (could be minTs later)
+
 
     const lines = text.split(/\\r?\\n/);
     for (let i = 0; i < lines.length; i++) {
@@ -177,11 +181,11 @@ const workerScript = `
 
       if (ev.process_exec || ev.process_exit) {
         const child = (ev.process_exec || ev.process_exit).process;
-        const parent = (ev.process_exec || ev.process_exit).parent;
+        const parent = (ev.process_exec || ev.process_exit).parent; // Can be null
 
         const c = up(child.exec_id);
         c.meta = child;
-        c.parent = child.parent_exec_id || ROOT_ID;
+        c.parent = child.parent_exec_id || (parent ? parent.exec_id : ROOT_ID);
         remember(child.exec_id, ts);
 
         if (parent) {
@@ -190,6 +194,12 @@ const workerScript = `
           p.parent ??= parent.parent_exec_id || ROOT_ID;
           remember(parent.exec_id, ts);
         }
+         // Ensure root has earliest timestamp if not explicitly set
+        if (nodeTime.get(ROOT_ID) === undefined || ts < nodeTime.get(ROOT_ID)) {
+            nodeTime.set(ROOT_ID, ts);
+        }
+
+
       } else {
         const jsonStr = JSON.stringify(ev);
         const isFile = /file_arg|file_event|security_file|fs/i.test(jsonStr);
@@ -218,22 +228,45 @@ const workerScript = `
 
         if (isFile) rec.files.push(ev);
         if (isNet) rec.nets.push(ev);
-
         remember(id, ts);
       }
 
-      if (i % 100 === 0) {
+      if (i % 5000 === 0) { // Adjusted for potentially larger files
         self.postMessage({ type: 'progress', percentage: Math.round((i / lines.length) * 100) });
       }
     }
+    
+    // Ensure root has a timestamp, defaulting to minTs if somehow missed
+    if (!nodeTime.has(ROOT_ID) && minTs !== Infinity) {
+        nodeTime.set(ROOT_ID, minTs);
+    } else if (!nodeTime.has(ROOT_ID)) {
+        nodeTime.set(ROOT_ID, 0); // Absolute fallback
+    }
 
-    procMap.forEach((_, id) => {
-      if (!nodeTime.has(id)) nodeTime.set(id, minTs);
+
+    // Post-processing: Ensure all nodes have a timestamp (default to minTs if missing)
+    // and all parents exist, defaulting to ROOT_ID.
+    // Also, ensure all nodes in procMap are in nodeTime.
+    const allNodeIds = new Set(procMap.keys());
+    procMap.forEach((p, id) => {
+        if (!nodeTime.has(id)) {
+            nodeTime.set(id, minTs === Infinity ? 0 : minTs); // Default to overall minTs
+        }
+        if (p.parent && !procMap.has(p.parent)) {
+            p.parent = ROOT_ID; // Orphaned, point to root
+        }
+        allNodeIds.add(p.parent);
     });
+
+    // Ensure ROOT_ID is in nodeTime if it's a parent
+    if(allNodeIds.has(ROOT_ID) && !nodeTime.has(ROOT_ID)){
+        nodeTime.set(ROOT_ID, minTs === Infinity ? 0 : minTs);
+    }
+
 
     self.postMessage({
       type: 'complete',
-      data: { procMap, nodeTime, edgeTime, minTs, maxTs }
+      data: { procMap, nodeTime, edgeTime, minTs, maxTs } // edgeTime is passed but not fully populated by worker
     });
   };
 `;
@@ -242,7 +275,7 @@ const workerScript = `
 fileInput.addEventListener('change', e => {
   const f = e.target.files[0];
   if (!f) return;
-  show('Reading file…');
+  show('Reading fileâ¦');
   const r = new FileReader();
   r.onload = ev => {
     const blob = new Blob([workerScript], { type: 'application/javascript' });
@@ -253,206 +286,437 @@ fileInput.addEventListener('change', e => {
       } else if (msg.data.type === 'complete') {
         procMap = msg.data.data.procMap;
         nodeTime = msg.data.data.nodeTime;
-        edgeTime = msg.data.data.edgeTime;
-        minTs = msg.data.data.minTs;
-        maxTs = msg.data.data.maxTs;
+        // edgeTime will be populated in buildGraph
+        minTs = msg.data.data.minTs === Infinity ? 0 : msg.data.data.minTs;
+        maxTs = msg.data.data.maxTs === -Infinity ? 0 : msg.data.data.maxTs;
+        
+        // Ensure ROOT has a valid timestamp if not set by worker
+        if (!nodeTime.has(ROOT) || nodeTime.get(ROOT) === undefined) {
+            nodeTime.set(ROOT, minTs);
+        }
+        if (minTs > nodeTime.get(ROOT)) { // Root should be the earliest
+            minTs = nodeTime.get(ROOT);
+        }
+
+
         buildGraph();
         worker.terminate();
       }
     };
     worker.onerror = function(error) {
+      console.error('Worker error:', error);
       show('Error processing file: ' + error.message);
+      hide(); // Ensure overlay is hidden on error
       worker.terminate();
     };
     worker.postMessage(ev.target.result);
   };
   r.readAsText(f);
 });
-searchInput.addEventListener('input', refreshColors);
+
+let searchDebounceTimer = null;
+const SEARCH_DEBOUNCE_DELAY = 250; // ms
+searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+        show('Applying search...');
+        try {
+            refreshColors();
+        } finally {
+            hide();
+        }
+    }, SEARCH_DEBOUNCE_DELAY);
+});
+
 
 /* --- Build Graph --- */
 async function buildGraph() {
-  show('Building graph…');
+  show('Building graphâ¦');
+  edgeTime = new Map(); // Initialize edgeTime here
 
   const elkNodes = [], elkEdges = [], width = {};
   procMap.forEach((p, id) => {
-    const main = id === ROOT ? ROOT : p.meta?.binary?.split('/').pop() || id.slice(0, 8);
+    const main = id === ROOT ? ROOT : basename(p.meta?.binary) || id.slice(0, 8);
     const sub = id === ROOT ? '' : `PID ${p.meta?.pid ?? '?'}`;
     width[id] = Math.max(MINW, Math.max(main.length, sub.length) * CHAR + 24);
     elkNodes.push({ id, width: width[id], height: H });
 
     if (id !== ROOT) {
       const par = p.parent && procMap.has(p.parent) ? p.parent : ROOT;
-      elkEdges.push({ id: `${par}->${id}`, sources: [par], targets: [id] });
-      edgeTime.set(`${par}->${id}`, nodeTime.get(id));
+      if (!procMap.has(par) && par !== ROOT) { // Should not happen if worker fixed parents
+          console.warn(`Parent ${par} for node ${id} not found, defaulting to ROOT.`);
+          p.parent = ROOT;
+      }
+      const edgeId = `${par}->${id}`;
+      elkEdges.push({ id: edgeId, sources: [par], targets: [id] });
+      // Edge time is the timestamp of the child node's appearance
+      edgeTime.set(edgeId, nodeTime.get(id) || minTs);
     }
   });
+  
+  // Ensure all nodes (especially ROOT) are in nodeTime if not already
+  if (!nodeTime.has(ROOT)) {
+    nodeTime.set(ROOT, minTs); // Default ROOT time to overall minimum
+  }
 
-  show('Computing layout (ELK)…');
+
+  show('Computing layout (ELK)â¦');
   const elk = new ELK();
   const layout = await elk.layout({
     id: 'root',
     layoutOptions: {
-      'elk.algorithm': 'layered',
-      'elk.direction': 'RIGHT',
-      'elk.edgeRouting': 'ORTHOGONAL',
-      'elk.spacing.nodeNode': '48',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '48'
+      'elk.algorithm': 'layered', 'elk.direction': 'RIGHT', 'elk.edgeRouting': 'ORTHOGONAL',
+      'elk.spacing.nodeNode': '48', 'elk.layered.spacing.nodeNodeBetweenLayers': '48'
     },
-    children: elkNodes,
-    edges: elkEdges
+    children: elkNodes, edges: elkEdges
   });
 
   const pos = {};
-  layout.children.forEach(n => (pos[n.id] = { x: n.x + width[n.id] / 2, y: n.y + H / 2 }));
+  layout.children.forEach(n => (pos[n.id] = { x: n.x + (width[n.id] || MINW) / 2, y: n.y + H / 2 }));
 
   const vNodes = [], vEdges = [];
   procMap.forEach((p, id) => {
-    const w = width[id], root = id === ROOT, hasF = p.files.length;
-    const { x, y } = pos[id];
+    const w = width[id] || MINW;
+    const rootNode = id === ROOT;
+    const hasFiles = p.files?.length > 0; // Ensure p.files exists
+    const { x, y } = pos[id] || {x:0, y:0}; // Default pos if not found
 
     vNodes.push({
-      id,
-      label: root ? ROOT : `${p.meta?.binary?.split('/').pop() || id.slice(0, 8)}\nPID ${p.meta?.pid ?? '?'}`,
-      shape: root ? 'ellipse' : 'box',
-      font: { multi: 'html', bold: root },
+      id, x, y, fixed: { x: true, y: true },
+      label: rootNode ? ROOT : `${basename(p.meta?.binary) || id.slice(0,8)}\nPID ${p.meta?.pid ?? '?'}`,
+      shape: rootNode ? 'ellipse' : 'box',
+      font: { multi: 'html', bold: rootNode ? { mod: 'bold' } : { mod: ''} }, // Corrected font bold
       borderRadius: 12,
       widthConstraint: { minimum: w },
-      color: root ? rootCol() : hasF ? fileCol() : normCol(),
-      x,
-      y,
-      fixed: { x: true, y: true }
+      // Initial color will be set by applyTimeline, no need to set complex color here
+      // Initial hidden state also managed by applyTimeline
     });
 
     ['_in', '_out'].forEach(pt => {
       const dx = pt === '_in' ? -w / 2 : w / 2;
       vNodes.push({
-        id: id + pt,
-        shape: 'dot',
-        size: 1,
-        color: 'rgba(0,0,0,0)',
-        physics: false,
-        x: x + dx,
-        y: y,
-        fixed: { x: true, y: true }
+        id: id + pt, shape: 'dot', size: 1, color: 'rgba(0,0,0,0)', physics: false,
+        x: x + dx, y: y, fixed: { x: true, y: true }
       });
     });
   });
 
   elkEdges.forEach(e => vEdges.push({
-    id: e.id,
-    from: e.sources[0] + '_out',
-    to: e.targets[0] + '_in',
-    color: '#8e8e93',
-    width: 1.2
+    id: e.id, from: e.sources[0] + '_out', to: e.targets[0] + '_in',
+    color: '#8e8e93', width: 1.2
   }));
 
-  console.log(`Nodes: ${vNodes.length}, Edges: ${vEdges.length}`);
+  console.log(`Nodes: ${vNodes.length/3}, Actual Nodes: ${procMap.size}, Edges: ${vEdges.length}`);
 
   nodesDS = new vis.DataSet(vNodes);
   edgesDS = new vis.DataSet(vEdges);
 
   network?.destroy();
   network = new vis.Network(netDiv, { nodes: nodesDS, edges: edgesDS }, {
-    physics: false,
-    edges: { smooth: false },
+    physics: false, edges: { smooth: false },
     interaction: { hover: true, navigationButtons: true, keyboard: true }
   });
 
-  const tsArr = [...new Set([...nodeTime.values(), ...edgeTime.values()])].sort((a, b) => a - b);
+  // Ensure minTs and maxTs are numbers
+  minTs = Number(minTs);
+  maxTs = Number(maxTs);
+  if (isNaN(minTs) || minTs === Infinity) minTs = 0;
+  if (isNaN(maxTs) || maxTs === -Infinity) maxTs = minTs > 0 ? minTs : Date.now();
+
+
+  // Create sorted unique timestamp array for slider
+  const uniqueTimestamps = [...new Set([...nodeTime.values(), ...edgeTime.values()].filter(t => !isNaN(t)))].sort((a, b) => a - b);
+  tsArr = uniqueTimestamps.length > 0 ? uniqueTimestamps : [minTs, maxTs];
+  if (tsArr.length === 1 && tsArr[0] === 0 && maxTs > 0) tsArr = [0, maxTs]; // Handle single zero ts
+  if (tsArr.length === 0) tsArr = [0,100]; // Fallback
+
+
   slider.min = 0;
-  slider.max = tsArr.length - 1;
+  slider.max = tsArr.length > 1 ? tsArr.length - 1 : 1; // Ensure max is at least 1 if tsArr has one item
   slider.step = 1;
   slider.value = slider.max;
-  timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
+  
+  timeLabel.textContent = tsArr.length > 0 ? new Date(tsArr[slider.max]).toLocaleString() : new Date(maxTs).toLocaleString();
 
-  let raf = null;
+
+  let rafId = null;
+  let sliderDebounceTimer = null;
+  const SLIDER_DEBOUNCE_DELAY = 50;
+
   slider.oninput = () => {
     const idx = +slider.value;
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
-      applyTimeline(tsArr[idx]);
-      timeLabel.textContent = new Date(tsArr[idx]).toLocaleString();
-      raf = null;
-    });
+    const currentTimeMs = tsArr[idx] ?? maxTs;
+
+    timeLabel.textContent = new Date(currentTimeMs).toLocaleString(); // Immediate feedback
+
+    if (rafId) cancelAnimationFrame(rafId);
+    clearTimeout(sliderDebounceTimer);
+
+    sliderDebounceTimer = setTimeout(() => {
+      show('Updating view...');
+      rafId = requestAnimationFrame(() => {
+        try {
+          applyTimeline(currentTimeMs);
+        } finally {
+          hide();
+          rafId = null;
+        }
+      });
+    }, SLIDER_DEBOUNCE_DELAY);
   };
 
   network.on('selectNode', ev => {
     const id = ev.nodes[0];
     if (!id || id.endsWith('_in') || id.endsWith('_out')) { clearPath(); return; }
+    selectedNodeIdForPath = id; // Keep track of the main selected node
     showDetails(id);
-    refreshColors();
-    paintPath(id);
+    paintPath(id); // This will set path colors
+    // No need to call refreshColors here, paintPath handles it.
   });
-  network.on('deselectNode', clearPath);
+  network.on('deselectNode', () => {
+      selectedNodeIdForPath = null;
+      clearPath();
+  });
 
-  applyTimeline(tsArr[slider.max]);
+  // Initial view: show all nodes up to the max timestamp
+  applyTimeline(tsArr.length > 0 ? tsArr[slider.max] : maxTs);
   hide();
 }
 
-/* --- Timeline Filter --- */
+/* --- Timeline Filter (Optimized) --- */
 function applyTimeline(wallMs) {
-  nodesDS.forEach(n => {
-    if (n.id.endsWith('_in') || n.id.endsWith('_out')) return;
-    const hide = nodeTime.get(n.id) > wallMs;
-    nodesDS.update([{ id: n.id, hidden: hide }, { id: n.id + '_in', hidden: hide }, { id: n.id + '_out', hidden: hide }]);
+  if (!nodesDS || !edgesDS || !procMap) return;
+
+  const nodeUpdates = [];
+  const edgeUpdates = [];
+
+  const q = searchInput.value.trim().toLowerCase();
+  let hits = [];
+  if (q) {
+    procMap.forEach((p, id) => {
+      const s = `${p.meta?.binary || ''} ${p.meta?.pid || ''}`.toLowerCase();
+      if (s.includes(q)) hits.push(id);
+    });
+  }
+
+  nodesDS.forEach(n_ds => {
+    if (n_ds.id.endsWith('_in') || n_ds.id.endsWith('_out')) return;
+
+    const nodeId = n_ds.id;
+    const pData = procMap.get(nodeId);
+    if (!pData) return; // Should not happen if data is consistent
+
+    const currentlyHidden = n_ds.hidden === true; // Be explicit
+    const nodeAppearsAt = nodeTime.get(nodeId) ?? minTs;
+    const shouldBeHidden = nodeAppearsAt > wallMs;
+
+    if (currentlyHidden && !shouldBeHidden) { // Becoming visible
+      let color;
+      if (selectedPathNodes.has(nodeId)) { color = pathCol(); }
+      else if (nodeId === ROOT) { color = rootCol(); }
+      else if (hits.includes(nodeId)) { color = hitCol(); }
+      else if (pData.files?.length > 0) { color = fileCol(); }
+      else { color = normCol(); }
+      nodeUpdates.push({ id: nodeId, hidden: false, color: color });
+      nodeUpdates.push({ id: nodeId + '_in', hidden: false });
+      nodeUpdates.push({ id: nodeId + '_out', hidden: false });
+    } else if (!currentlyHidden && shouldBeHidden) { // Becoming hidden
+      nodeUpdates.push({ id: nodeId, hidden: true });
+      nodeUpdates.push({ id: nodeId + '_in', hidden: true });
+      nodeUpdates.push({ id: nodeId + '_out', hidden: true });
+    } else if (!shouldBeHidden) { // Remains visible, check if color needs update due to search/path changes not caught elsewhere
+        let newColor;
+        if (selectedPathNodes.has(nodeId)) { newColor = pathCol(); }
+        else if (nodeId === ROOT) { newColor = rootCol(); }
+        else if (hits.includes(nodeId)) { newColor = hitCol(); }
+        else if (pData.files?.length > 0) { newColor = fileCol(); }
+        else { newColor = normCol(); }
+        
+        // Only update if color differs (vis-network might optimize this, but explicit check can be good)
+        // This comparison is tricky due to object equality. For simplicity, update if visible.
+        // A better way would be to compare stringified colors or individual properties if performance demands.
+        // if (JSON.stringify(n_ds.color) !== JSON.stringify(newColor)) { // This is too slow
+             nodeUpdates.push({ id: nodeId, color: newColor }); // Re-apply color if visible
+        // }
+    }
   });
 
-  edgesDS.forEach(e => {
-    const hide = edgeTime.get(e.id) > wallMs || nodesDS.get(e.from.replace(/_out$/, ''))?.hidden || nodesDS.get(e.to.replace(/_in$/, ''))?.hidden;
-    edgesDS.update({ id: e.id, hidden: hide });
+  if (nodeUpdates.length > 0) nodesDS.update(nodeUpdates);
+
+  const tempNodeHiddenStates = new Map();
+  nodeUpdates.forEach(update => {
+      if (update.id && update.hidden !== undefined && !update.id.endsWith('_in') && !update.id.endsWith('_out')) {
+          tempNodeHiddenStates.set(update.id, update.hidden);
+      }
   });
 
-  refreshColors();
+
+  edgesDS.forEach(e_ds => {
+    const edgeId = e_ds.id;
+    const edgeAppearsAt = edgeTime.get(edgeId) ?? minTs;
+
+    const fromNodeId = e_ds.from.replace(/_out$/, '');
+    const toNodeId = e_ds.to.replace(/_in$/, '');
+
+    const fromNodeAppearsAt = nodeTime.get(fromNodeId) ?? minTs;
+    const toNodeAppearsAt = nodeTime.get(toNodeId) ?? minTs;
+
+    // Use the potentially updated hidden state if available, otherwise calculate
+    const fromNodeIsHidden = tempNodeHiddenStates.has(fromNodeId) ? tempNodeHiddenStates.get(fromNodeId) : (fromNodeAppearsAt > wallMs);
+    const toNodeIsHidden = tempNodeHiddenStates.has(toNodeId) ? tempNodeHiddenStates.get(toNodeId) : (toNodeAppearsAt > wallMs);
+
+    const currentlyHidden = e_ds.hidden === true;
+    const shouldBeHidden = edgeAppearsAt > wallMs || fromNodeIsHidden || toNodeIsHidden;
+
+    if (currentlyHidden && !shouldBeHidden) { // Becoming visible
+      let color = '#8e8e93';
+      let width = 1.2;
+      if (selectedPathEdges.has(edgeId)) {
+        color = '#ff453a';
+        width = 2.6;
+      }
+      edgeUpdates.push({ id: edgeId, hidden: false, color: color, width: width });
+    } else if (!currentlyHidden && shouldBeHidden) { // Becoming hidden
+      edgeUpdates.push({ id: edgeId, hidden: true });
+    } else if (!shouldBeHidden) { // Remains visible, update color/width if needed
+        let newColor = '#8e8e93';
+        let newWidth = 1.2;
+        if (selectedPathEdges.has(edgeId)) {
+            newColor = '#ff453a';
+            newWidth = 2.6;
+        }
+        // if (e_ds.color !== newColor || e_ds.width !== newWidth) { // Simple property check
+            edgeUpdates.push({ id: edgeId, color: newColor, width: newWidth });
+        // }
+    }
+  });
+
+  if (edgeUpdates.length > 0) edgesDS.update(edgeUpdates);
 }
 
-/* --- Coloring/Search/Path --- */
+
+/* --- Coloring/Search/Path (refreshColors is for full recalcs) --- */
 function refreshColors() {
-  if (!nodesDS) return;
-  const q = searchInput.value.trim().toLowerCase(), hits = [];
-  procMap.forEach((p, id) => {
-    const s = `${p.meta?.binary || ''} ${p.meta?.pid || ''}`.toLowerCase();
-    if (q && s.includes(q)) hits.push(id);
-  });
-  const ups = [];
+  if (!nodesDS || !procMap) return;
+  const q = searchInput.value.trim().toLowerCase();
+  const hits = [];
+  if (q) {
+    procMap.forEach((p, id) => {
+      const s = `${p.meta?.binary || ''} ${p.meta?.pid || ''}`.toLowerCase();
+      if (s.includes(q)) hits.push(id);
+    });
+  }
+
+  const nodeColorUpdates = [];
   nodesDS.forEach(n => {
     if (n.hidden || n.id.endsWith('_in') || n.id.endsWith('_out')) return;
-    const p = procMap.get(n.id), col = n.id === ROOT ? rootCol() : hits.includes(n.id) ? hitCol() : p.files.length ? fileCol() : normCol();
-    ups.push({ ...n, color: col });
+    const pData = procMap.get(n.id);
+    if (!pData) return;
+
+    let newColor;
+    if (selectedPathNodes.has(n.id)) { newColor = pathCol(); }
+    else if (n.id === ROOT) { newColor = rootCol(); }
+    else if (hits.includes(n.id)) { newColor = hitCol(); }
+    else if (pData.files?.length > 0) { newColor = fileCol(); }
+    else { newColor = normCol(); }
+    nodeColorUpdates.push({ id: n.id, color: newColor });
   });
-  nodesDS.update(ups);
-  edgesDS.forEach(e => { if (!e.hidden) edgesDS.update({ id: e.id, color: '#8e8e93', width: 1.2 }); });
+  if (nodeColorUpdates.length > 0) nodesDS.update(nodeColorUpdates);
+
+  const edgeColorUpdates = [];
+  edgesDS.forEach(e => {
+    if (e.hidden) return;
+    let newColor = '#8e8e93';
+    let newWidth = 1.2;
+    if (selectedPathEdges.has(e.id)) {
+      newColor = '#ff453a';
+      newWidth = 2.6;
+    }
+    edgeColorUpdates.push({ id: e.id, color: newColor, width: newWidth });
+  });
+  if (edgeColorUpdates.length > 0) edgesDS.update(edgeColorUpdates);
 }
 
-function paintPath(id) {
-  const upsN = [], upsE = [];
-  let cur = id;
-  while (cur && cur !== ROOT) {
-    const par = procMap.get(cur)?.parent || ROOT;
-    if (!nodesDS.get(cur)?.hidden) upsN.push({ id: cur, color: pathCol() });
-    if (!edgesDS.get(`${par}->${cur}`)?.hidden) upsE.push({ id: `${par}->${cur}`, color: '#ff453a', width: 2.6 });
-    cur = par;
+function paintPath(nodeId) {
+  if (!nodesDS || !procMap.has(nodeId)) return;
+
+  // First, clear existing path highlights from sets before repainting
+  selectedPathNodes.clear();
+  selectedPathEdges.clear();
+  // Call refreshColors to reset everything to non-path state before painting new path
+  // This ensures nodes/edges not in the new path get their correct (default/search) colors.
+  refreshColors();
+
+
+  const pathNodeUpdates = [];
+  const pathEdgeUpdates = [];
+  let currentId = nodeId;
+
+  while (currentId && procMap.has(currentId)) {
+    const nodeDataFromDS = nodesDS.get(currentId);
+    if (nodeDataFromDS && !nodeDataFromDS.hidden) { // Only add to set and update if visible
+        selectedPathNodes.add(currentId);
+        pathNodeUpdates.push({ id: currentId, color: pathCol() });
+    }
+    
+    const procData = procMap.get(currentId);
+    if (currentId === ROOT || !procData || !procData.parent) break;
+
+    const parentId = procData.parent;
+    if (!procMap.has(parentId)) break; // Parent doesn't exist in procMap
+
+    const edgeId = `${parentId}->${currentId}`;
+    const edgeDataFromDS = edgesDS.get(edgeId);
+    if (edgeDataFromDS && !edgeDataFromDS.hidden) { // Only add to set and update if visible
+        selectedPathEdges.add(edgeId);
+        pathEdgeUpdates.push({ id: edgeId, color: '#ff453a', width: 2.6 });
+    }
+    currentId = parentId;
   }
-  upsN.push({ id: ROOT, color: pathCol() });
-  nodesDS.update(upsN);
-  edgesDS.update(upsE);
+  
+  // Ensure ROOT is also path colored if it's part of the path and visible
+  if (selectedPathNodes.has(ROOT)) { // It would have been added above if reached
+      const rootNodeFromDS = nodesDS.get(ROOT);
+      if (rootNodeFromDS && !rootNodeFromDS.hidden) {
+          // Check if already in pathNodeUpdates to avoid duplicates
+          if (!pathNodeUpdates.find(update => update.id === ROOT)) {
+              pathNodeUpdates.push({ id: ROOT, color: pathCol() });
+          }
+      }
+  } else if (nodeId === ROOT) { // Handle case where ROOT itself is selected
+    const rootNodeFromDS = nodesDS.get(ROOT);
+      if (rootNodeFromDS && !rootNodeFromDS.hidden) {
+        selectedPathNodes.add(ROOT);
+        pathNodeUpdates.push({ id: ROOT, color: pathCol() });
+      }
+  }
+
+
+  if (pathNodeUpdates.length > 0) nodesDS.update(pathNodeUpdates);
+  if (pathEdgeUpdates.length > 0) edgesDS.update(pathEdgeUpdates);
 }
 
-const clearPath = () => refreshColors();
 
+const clearPath = () => {
+  selectedPathNodes.clear();
+  selectedPathEdges.clear();
+  refreshColors(); // This will restore default/search colors
+};
+
+
+/* --- Utility functions for Details Pane (largely unchanged) --- */
 function fileList(arr) {
   return '<ul>' + arr.slice(0, 150).map(ev => {
     const { type, path } = info(ev);
     const cls = type === 'READ' ? 'read' : type === 'WRITE' ? 'write' : 'unknown';
     return `<li><span class="tag ${cls}">${type}</span>${esc(path)}</li>`;
-  }).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
+  }).join('') + (arr.length > 150 ? '<li>â¦</li>' : '') + '</ul>';
 }
 
 function rawList(arr) {
-  return '<ul>' + arr.slice(0, 150).map(ev => `<li><pre>${esc(JSON.stringify(ev).slice(0, 240))}</pre></li>`).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
+  return '<ul>' + arr.slice(0, 150).map(ev => `<li><pre>${esc(JSON.stringify(ev).slice(0, 240))}</pre></li>`).join('') + (arr.length > 150 ? '<li>â¦</li>' : '') + '</ul>';
 }
 
-/* --- Extract Type/Path from File Event --- */
 function info(ev) {
   if (ev.process_kprobe) {
     const args = ev.process_kprobe.args || [];
@@ -466,28 +730,35 @@ function info(ev) {
   return { type: 'UNKNOWN', path: 'unknown' };
 }
 
-/* --- Details Pane --- */
 function showDetails(id) {
   const proc = procMap.get(id);
-  if (!proc) return;
+  if (!proc || !proc.meta) { // Ensure proc.meta exists
+      details.innerHTML = `<h2>Process Details</h2><p>Details not available for <code>${esc(id)}</code>.</p>`;
+      if (id === ROOT) details.innerHTML = '<h2>Process Details</h2><p><b>systemd</b> (synthetic root)</p>';
+      return;
+  }
 
   if (id === ROOT) {
     details.innerHTML = '<h2>Process Details</h2><p><b>systemd</b> (synthetic root)</p>';
     return;
   }
 
-  const par = procMap.get(proc.parent) || procMap.get(ROOT);
+  const parentId = proc.parent || ROOT;
+  const par = procMap.get(parentId) || procMap.get(ROOT); // Fallback to ROOT's data if parent not found
+  const parentMeta = par?.meta || { binary: ROOT, pid: 0 };
+
+
   details.innerHTML = `
     <h2>Process Details</h2>
     <dl>
-      <dt>Name</dt><dd><code>${esc(basename(proc.meta?.binary))}</code> <span class="pid-badge">(PID ${proc.meta?.pid ?? '?'})</span></dd>
-      <dt>Command line</dt><dd><code>${esc(proc.meta?.arguments || '')}</code></dd>
-      <dt>Path</dt><dd><code>${esc(proc.meta?.binary || '')}</code></dd>
-      <dt>Parent</dt><dd><code>${esc(par.meta?.binary || ROOT)}</code> (PID ${par.meta?.pid ?? 0})</dd>
-      <dt>Started</dt><dd>${proc.meta?.start_time || '?'}</dd>
+      <dt>Name</dt><dd><code>${esc(basename(proc.meta.binary))}</code> <span class="pid-badge">(PID ${proc.meta.pid ?? '?'})</span></dd>
+      <dt>Command line</dt><dd><code>${esc(proc.meta.arguments || '')}</code></dd>
+      <dt>Path</dt><dd><code>${esc(proc.meta.binary || '')}</code></dd>
+      <dt>Parent</dt><dd><code>${esc(basename(parentMeta.binary))}</code> (PID ${parentMeta.pid ?? (parentId === ROOT ? 0 : '?')})</dd>
+      <dt>Started</dt><dd>${proc.meta.start_time || new Date(nodeTime.get(id) || 0).toLocaleString()}</dd>
     </dl>
-    ${proc.files.length ? `<details class="event-group" open><summary>File events (${proc.files.length})</summary>${fileList(proc.files)}</details>` : ''}
-    ${proc.nets.length ? `<details class="event-group" open><summary>Network events (${proc.nets.length})</summary>${rawList(proc.nets)}</details>` : ''}
+    ${proc.files?.length > 0 ? `<details class="event-group" open><summary>File events (${proc.files.length})</summary>${fileList(proc.files)}</details>` : ''}
+    ${proc.nets?.length > 0 ? `<details class="event-group" open><summary>Network events (${proc.nets.length})</summary>${rawList(proc.nets)}</details>` : ''}
   `;
 }
 </script>
