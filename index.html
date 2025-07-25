@@ -61,6 +61,7 @@
     details.event-group { margin-top: 0.8rem; }
     details.event-group summary { cursor: pointer; font-weight: 600; font-size: clamp(11px, 2.2vw, 13px); }
     ul { margin-left: 1rem; list-style: circle; font-size: clamp(11px, 2.2vw, 13px); }
+    .timestamp { font-size: clamp(9px, 2vw, 10px); color: var(--mono); display: block; margin-top: 0.2rem; }
     footer { padding: 0.5rem 1rem; border-top: 1px solid var(--border); background: var(--header); backdrop-filter: blur(14px); display: flex; align-items: center; gap: 0.5rem; }
     #timeSlider { flex: 1; width: 100%; height: 8px; touch-action: pan-x; }
     #timeLabel { font-size: clamp(10px, 2vw, 12px); color: var(--mono); min-width: 120px; text-align: right; }
@@ -236,7 +237,7 @@ const workerScript = `
       if (processObj) {
         const rec = procMap.get(id);
         if (rec) {
-          if (ev.process_kprobe) rec.files.push(ev.process_kprobe);
+          if (ev.process_kprobe) rec.files.push(ev); // Changed to push full ev to access ev.time
           // Add other event types if needed
         }
       }
@@ -688,9 +689,10 @@ const clearPath = () => {
 /* --- Details Pane --- */
 function fileList(arr) {
   return '<ul>' + arr.slice(0, 150).map(ev => {
-    const { type, path } = info(ev);
+    const { type, path } = info(ev.process_kprobe); // Access process_kprobe if needed, but since we pushed full ev, ev.time is available
     const cls = type === 'READ' ? 'read' : type === 'WRITE' ? 'write' : 'unknown';
-    return `<li><span class="tag ${cls}">${type}</span>${esc(path)}</li>`;
+    const timestamp = ev.time ? new Date(ev.time).toLocaleString() : 'Unknown time';
+    return `<li><span class="tag ${cls}">${type}</span>${esc(path)}<span class="timestamp">@ ${timestamp}</span></li>`;
   }).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
 }
 
@@ -698,9 +700,9 @@ function rawList(arr) {
   return '<ul>' + arr.slice(0, 150).map(ev => `<li><pre>${esc(JSON.stringify(ev).slice(0, 240))}</pre></li>`).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
 }
 
-function info(ev) {
-  if (ev.function_name === 'security_file_permission') {
-    const args = ev.args || [];
+function info(kprobeEv) {
+  if (kprobeEv && kprobeEv.function_name === 'security_file_permission') {
+    const args = kprobeEv.args || [];
     const path = args[0]?.file_arg?.path || 'unknown';
     const code = args[1]?.int_arg;
     return { type: code === 4 ? 'READ' : code === 2 ? 'WRITE' : 'UNKNOWN', path };
