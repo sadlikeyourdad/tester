@@ -691,7 +691,7 @@ function fileList(arr) {
   return '<ul>' + arr.slice(0, 150).map(ev => {
     const { type, path } = info(ev.process_kprobe); // Access process_kprobe if needed, but since we pushed full ev, ev.time is available
     const cls = type === 'READ' ? 'read' : type === 'WRITE' ? 'write' : 'unknown';
-    const timestamp = ev.time ? new Date(ev.time).toLocaleString() : 'Unknown time';
+    const timestamp = ev.time ? new Date(ev.time).toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : 'Unknown time';
     return `<li><span class="tag ${cls}">${type}</span>${esc(path)}<span class="timestamp">@ ${timestamp}</span></li>`;
   }).join('') + (arr.length > 150 ? '<li>…</li>' : '') + '</ul>';
 }
@@ -728,6 +728,8 @@ function showDetails(id) {
   const par = procMap.get(parentId) || procMap.get(ROOT);
   const parentMeta = par?.meta || { binary: ROOT, pid: 0 };
 
+  const startedTs = proc.meta.start_time ? new Date(proc.meta.start_time).toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : new Date(nodeTime.get(id) || 0).toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
   details.innerHTML = `
     <h2>Process Details</h2>
     <dl>
@@ -735,7 +737,7 @@ function showDetails(id) {
       <dt>Command line</dt><dd><code>${esc(proc.meta.arguments || '')}</code></dd>
       <dt>Path</dt><dd><code>${esc(proc.meta.binary || '')}</code></dd>
       <dt>Parent</dt><dd><code>${esc(basename(parentMeta.binary))}</code> (PID ${parentMeta.pid ?? (parentId === ROOT ? 0 : '?')})</dd>
-      <dt>Started</dt><dd>${proc.meta.start_time || new Date(nodeTime.get(id) || 0).toLocaleString()}</dd>
+      <dt>Started</dt><dd>${startedTs}</dd>
     </dl>
     ${proc.files?.length > 0 ? `<details class="event-group" open><summary>File events (${proc.files.length})</summary>${fileList(proc.files)}</details>` : ''}
     ${proc.nets?.length > 0 ? `<details class="event-group" open><summary>Network events (${proc.nets.length})</summary>${rawList(proc.nets)}</details>` : ''}
