@@ -76,6 +76,7 @@
     .read { background: var(--blue); }
     .write { background: var(--orange); }
     .unknown { background: var(--mono); }
+    .toggle-label { font-size: clamp(12px, 2.5vw, 14px); display: flex; align-items: center; gap: 0.5rem; }
     @media (max-width: 768px) {
       header { flex-direction: column; align-items: flex-start; padding: 0.75rem; }
       header .title, label.file-btn, #searchInput { width: 100%; }
@@ -87,6 +88,7 @@
       footer { flex-wrap: wrap; padding: 0.5rem; }
       #timeSlider { order: 1; width: 100%; }
       #timeLabel { order: 2; width: 100%; text-align: center; margin-top: 0.5rem; }
+      .toggle-label { width: 100%; justify-content: center; }
     }
   </style>
 </head>
@@ -95,6 +97,7 @@
   <span class="title">Linux Process-Tree Viewer</span>
   <label class="file-btn">Load JSON<input type="file" id="fileInput" accept=".json,.log,.txt"></label>
   <input id="searchInput" type="search" placeholder="Search process / PID">
+  <label class="toggle-label"><input type="checkbox" id="cumulativeView"> Show All (Ignore Exits)</label>
 </header>
 <div id="layout">
   <div id="network"></div>
@@ -122,7 +125,8 @@ const basename = p => p?.split('/').pop() || '';
 /* DOM References */
 const netDiv = $('network'), details = $('details'), overlay = $('overlay'), overlayTxt = $('overlayText'),
       fileInput = $('fileInput'), searchInput = $('searchInput'),
-      slider = $('timeSlider'), timeLabel = $('timeLabel'), detailsToggle = $('details-toggle');
+      slider = $('timeSlider'), timeLabel = $('timeLabel'), detailsToggle = $('details-toggle'),
+      cumulativeView = $('cumulativeView');
 
 let network, nodesDS, edgesDS, procMap = new Map(), nodeTime = new Map(), nodeExitTime = new Map(), edgeTime = new Map(),
     minTs = Infinity, maxTs = -Infinity, tsArr = [];
@@ -411,16 +415,19 @@ async function buildGraph() {
   
   timeLabel.textContent = new Date(tsArr[slider.max]).toLocaleString();
 
+  let currentTimeMs = tsArr[slider.max];
+
   let rafId = null;
   let sliderDebounceTimer = null;
   const SLIDER_DEBOUNCE_DELAY = 50;
 
-  slider.oninput = () => {
-    const idx = +slider.value;
-    const currentTimeMs = tsArr[idx] ?? maxTs;
-
+  const updateTimeline = () => {
+    currentTimeMs = tsArr[+slider.value] ?? maxTs;
     timeLabel.textContent = new Date(currentTimeMs).toLocaleString();
+    applyTimeline(currentTimeMs);
+  };
 
+  slider.addEventListener('input', () => {
     if (rafId) cancelAnimationFrame(rafId);
     clearTimeout(sliderDebounceTimer);
 
@@ -428,14 +435,25 @@ async function buildGraph() {
       show('Updating view...');
       rafId = requestAnimationFrame(() => {
         try {
-          applyTimeline(currentTimeMs);
+          updateTimeline();
         } finally {
           hide();
           rafId = null;
         }
       });
     }, SLIDER_DEBOUNCE_DELAY);
-  };
+  });
+
+  cumulativeView.addEventListener('change', () => {
+    show('Updating view...');
+    requestAnimationFrame(() => {
+      try {
+        applyTimeline(currentTimeMs);
+      } finally {
+        hide();
+      }
+    });
+  });
 
   network.on('selectNode', ev => {
     const id = ev.nodes[0];
@@ -456,6 +474,8 @@ async function buildGraph() {
 /* --- Timeline Filter --- */
 function applyTimeline(wallMs) {
   if (!nodesDS || !edgesDS || !procMap) return;
+
+  const ignoreExits = cumulativeView.checked;
 
   const nodeUpdates = [];
   const edgeUpdates = [];
@@ -479,7 +499,10 @@ function applyTimeline(wallMs) {
     const currentlyHidden = n_ds.hidden === true;
     const nodeAppearsAt = nodeTime.get(nodeId) ?? minTs;
     const nodeExitsAt = nodeExitTime.get(nodeId);
-    const shouldBeHidden = nodeAppearsAt > wallMs || (nodeExitsAt && nodeExitsAt <= wallMs);
+    let shouldBeHidden = nodeAppearsAt > wallMs;
+    if (!ignoreExits && nodeExitsAt && nodeExitsAt <= wallMs) {
+      shouldBeHidden = true;
+    }
 
     if (currentlyHidden && !shouldBeHidden) {
       let color;
@@ -527,8 +550,13 @@ function applyTimeline(wallMs) {
     const fromNodeExitsAt = nodeExitTime.get(fromNodeId);
     const toNodeExitsAt = nodeExitTime.get(toNodeId);
 
-    const fromHidden = tempNodeHiddenStates.has(fromNodeId) ? tempNodeHiddenStates.get(fromNodeId) : (fromNodeAppearsAt > wallMs || (fromNodeExitsAt && fromNodeExitsAt <= wallMs));
-    const toHidden = tempNodeHiddenStates.has(toNodeId) ? tempNodeHiddenStates.get(toNodeId) : (toNodeAppearsAt > wallMs || (toNodeExitsAt && toNodeExitsAt <= wallMs));
+    let fromHidden = fromNodeAppearsAt > wallMs;
+    if (!ignoreExits && fromNodeExitsAt && fromNodeExitsAt <= wallMs) fromHidden = true;
+    fromHidden = tempNodeHiddenStates.has(fromNodeId) ? tempNodeHiddenStates.get(fromNodeId) : fromHidden;
+
+    let toHidden = toNodeAppearsAt > wallMs;
+    if (!ignoreExits && toNodeExitsAt && toNodeExitsAt <= wallMs) toHidden = true;
+    toHidden = tempNodeHiddenStates.has(toNodeId) ? tempNodeHiddenStates.get(toNodeId) : toHidden;
 
     const currentlyHidden = e_ds.hidden === true;
     const shouldBeHidden = edgeAppearsAt > wallMs || fromHidden || toHidden;
