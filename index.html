@@ -220,7 +220,7 @@ const workerScript = `
         const pid = parentObj.exec_id;
         const pr = up(pid);
         pr.meta ??= parentObj;
-        pr.parent ??= parentObj.parent_exec_id || ROOT_ID;
+        pr.parent = parentObj.parent_exec_id || ROOT_ID;
         remember(pid, ts);
       }
 
@@ -229,7 +229,7 @@ const workerScript = `
         const aid = anc.exec_id;
         const a = up(aid);
         a.meta ??= anc;
-        a.parent ??= anc.parent_exec_id || ROOT_ID;
+        a.parent = anc.parent_exec_id || ROOT_ID;
         const ancTs = Date.parse(anc.start_time || '');
         if (!isNaN(ancTs)) remember(aid, ancTs);
       }
